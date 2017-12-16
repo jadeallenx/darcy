@@ -1,0 +1,20 @@
+{application, darcy,
+ [{description, "Erlang DDB client"},
+  {vsn, "0.0.1"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib,
+    crypto,
+    ssl,
+    lhttpc,
+    jsone,
+    erliam
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, ["Mark Allen"]},
+  {licenses, ["Apache 2.0"]},
+  {links, [{"Github", "https://github.com/mrallen1/darcy"}]}
+ ]}.
