@@ -8,7 +8,13 @@
 -export([
     start/0,
     make_client/1,
-    make_local_client/1
+    make_local_client/1,
+    to_map/1,
+    to_ddb/1,
+    default_decode/1,
+    default_encode/1,
+    make_table_spec/5,
+    make_table_if_not_exists/3
 ]).
 
 start() ->
@@ -20,7 +26,7 @@ make_client(Region) ->
 make_local_client(Port) when is_integer(Port) ->
     do_make_client(<<"us-east-1">>, <<"http">>, <<"localhost">>, integer_to_binary(Port));
 make_local_client(Port) ->
-    do_make_client(<<"us-east-1">>, <<"http">>, <<"localhost">>, Port);
+    do_make_client(<<"us-east-1">>, <<"http">>, <<"localhost">>, Port).
 
 do_make_client(Region, Scheme, Endpoint, Port) ->
     #{ credentials => erliam:credentials(),
@@ -42,15 +48,47 @@ make_table_spec(AttributeDefs, KeySchema, Throughput, TableName, Extra) ->
 make_table_if_not_exists(Client, TableName, TableSpec) ->
     case darcy_ddb_api:describe_table(Client, #{ <<"TableName">> => TableName }) of
         {ok, _Result, {200, _Headers}} -> ok;
-        {ok, Error, {400, Headers}} -> attempt_make_table(Client, TableSpec)
+        {ok, _Error, {400, _Headers}} -> attempt_make_table(Client, TableSpec)
     end.
 
+attempt_make_table(_, _) -> ok.
 
-add_data_types(M) when is_map(M) ->
+default_decode(Blob) ->
+    zlib:uncompress(base64:decode(Blob)).
+
+default_encode(Data) ->
+    base64:encode(zlib:compress(Data)).
+
+to_map(M) when is_map(M) ->
+    maps:map(fun(_K, V) when is_map(V) -> unddt(V);
+                (_K, V) -> V end,
+             M).
+
+unddt(#{ <<"B">> := V }) ->
+    {M, F, A} = application:get_env(darcy, blob_decode_fun,
+                                    {darcy, default_decode, []}),
+    {blob, erlang:apply(M, F, [V | A])};
+unddt(#{ <<"N">> := V }) -> binary_to_integer(V);
+unddt(#{ <<"S">> := V }) -> V;
+unddt(#{ <<"BOOL">> := <<"true">> }) -> true;
+unddt(#{ <<"BOOL">> := <<"false">> }) -> false;
+unddt(#{ <<"L">> := V }) -> [ unddt(E) || E <- V ];
+unddt(#{ <<"M">> := V }) -> maps:map(fun(_K, Val) -> unddt(Val) end, V);
+unddt(#{ <<"SS">> := V }) -> ordsets:from_list([ E || E <- V ]);
+unddt(#{ <<"NS">> := V }) ->
+    ordsets:from_list([ binary_to_integer(E) || E <- V ]);
+unddt(#{ <<"NULL">> := _V }) -> undefined;
+unddt(Other) -> erlang:error({error, badarg}, [Other]).
+
+to_ddb(M) when is_map(M) ->
     maps:map(fun(_K, V) -> ddt(V) end, M);
-add_data_types(Other) -> erlang:error({error, badarg}, [Other]).
+to_ddb(Other) -> erlang:error({error, badarg}, [Other]).
 
 ddt(undefined) -> #{ <<"NULL">> => <<>> };
+ddt({blob, Data}) ->
+    {M, F, A} = application:get_env(darcy, blob_encode_fun,
+                                    {darcy, default_encode, []}),
+    #{ <<"B">> => erlang:apply(M, F, [ Data | A ]) };
 ddt(V) when is_integer(V) -> #{ <<"N">> => V };
 ddt(V) when is_float(V) -> #{ <<"N">> => V };
 ddt(V) when is_binary(V) -> #{ <<"S">> => V };
