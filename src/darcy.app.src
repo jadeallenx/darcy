@@ -7,7 +7,7 @@
     stdlib,
     crypto,
     ssl,
-    lhttpc,
+    hackney,
     jsone,
     erliam
    ]},

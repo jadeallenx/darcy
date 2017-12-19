@@ -136,3 +136,8 @@ binary_join(L, Sep) when is_list(Sep)  ->
     binary_join(L, list_to_binary(Sep));
 binary_join([H|T], Sep) ->
     binary_join(T, H, Sep).
+
+binary_join([], Acc, _) ->
+    Acc;
+binary_join([H|T], Acc, Sep) ->
+    binary_join(T, <<Acc/binary, Sep/binary, H/binary>>, Sep).

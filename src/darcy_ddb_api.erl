@@ -22,7 +22,7 @@
 %% your data is stored on solid state disks (SSDs) and automatically
 %% replicated across multiple Availability Zones in an AWS region, providing
 %% built-in high availability and data durability.
--module(aws_dynamodb).
+-module(darcy_ddb_api).
 
 -export([batch_get_item/2,
          batch_get_item/3,
