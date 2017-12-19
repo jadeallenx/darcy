@@ -1,6 +1,5 @@
+%% WARNING: DO NOT EDIT, AUTO-GENERATED CODE!
 %% See https://github.com/jkakar/aws-codegen for more details.
-%% Original source: https://github.com/jkakar/aws-erlang
-%% Uses Apache 2 license, same as this project
 
 %% @doc <fullname>Amazon DynamoDB</fullname>
 %%
@@ -23,18 +22,30 @@
 %% your data is stored on solid state disks (SSDs) and automatically
 %% replicated across multiple Availability Zones in an AWS region, providing
 %% built-in high availability and data durability.
--module(darcy_ddb_api).
+-module(aws_dynamodb).
 
 -export([batch_get_item/2,
          batch_get_item/3,
          batch_write_item/2,
          batch_write_item/3,
+         create_backup/2,
+         create_backup/3,
+         create_global_table/2,
+         create_global_table/3,
          create_table/2,
          create_table/3,
+         delete_backup/2,
+         delete_backup/3,
          delete_item/2,
          delete_item/3,
          delete_table/2,
          delete_table/3,
+         describe_backup/2,
+         describe_backup/3,
+         describe_continuous_backups/2,
+         describe_continuous_backups/3,
+         describe_global_table/2,
+         describe_global_table/3,
          describe_limits/2,
          describe_limits/3,
          describe_table/2,
@@ -43,6 +54,10 @@
          describe_time_to_live/3,
          get_item/2,
          get_item/3,
+         list_backups/2,
+         list_backups/3,
+         list_global_tables/2,
+         list_global_tables/3,
          list_tables/2,
          list_tables/3,
          list_tags_of_resource/2,
@@ -51,12 +66,16 @@
          put_item/3,
          query/2,
          query/3,
+         restore_table_from_backup/2,
+         restore_table_from_backup/3,
          scan/2,
          scan/3,
          tag_resource/2,
          tag_resource/3,
          untag_resource/2,
          untag_resource/3,
+         update_global_table/2,
+         update_global_table/3,
          update_item/2,
          update_item/3,
          update_table/2,
@@ -64,7 +83,7 @@
          update_time_to_live/2,
          update_time_to_live/3]).
 
--include_lib("lhttpc/include/lhttpc.hrl").
+-include_lib("hackney/include/hackney_lib.hrl").
 
 %%====================================================================
 %% API
@@ -225,6 +244,75 @@ batch_write_item(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"BatchWriteItem">>, Input, Options).
 
+%% @doc Creates a backup for an existing table.
+%%
+%% Each time you create an On-Demand Backup, the entire table data is backed
+%% up. There is no limit to the number of on-demand backups that can be
+%% taken.
+%%
+%% You can call <code>CreateBackup</code> at a maximum rate of 50 times per
+%% second.
+%%
+%% All backups in DynamoDB work without consuming any provisioned throughput
+%% on the table. This results in a fast, low-cost, and scalable backup
+%% process. In general, the larger the table, the more time it takes to back
+%% up. The backup is stored in an S3 data store that is maintained and
+%% managed by DynamoDB.
+%%
+%% Backups incorporate all writes (delete, put, update) that were completed
+%% within the last minute before the backup request was initiated. Backups
+%% might include some writes (delete, put, update) that were completed before
+%% the backup request was finished.
+%%
+%% For example, if you submit the backup request on 2018-12-14 at 14:25:00,
+%% the backup is guaranteed to contain all data committed to the table up to
+%% 14:24:00, and data committed after 14:26:00 will not be. The backup may or
+%% may not contain data modifications made between 14:24:00 and 14:26:00.
+%% On-Demand Backup does not support causal consistency.
+%%
+%% Along with data, the following are also included on the backups:
+%%
+%% <ul> <li> Global secondary indexes (GSIs)
+%%
+%% </li> <li> Local secondary indexes (LSIs)
+%%
+%% </li> <li> Streams
+%%
+%% </li> <li> Provisioned read and write capacity
+%%
+%% </li> </ul>
+create_backup(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    create_backup(Client, Input, []).
+create_backup(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"CreateBackup">>, Input, Options).
+
+%% @doc Creates a global table from an existing table. A global table creates
+%% a replication relationship between two or more DynamoDB tables with the
+%% same table name in the provided regions.
+%%
+%% Tables can only be added as the replicas of a global table group under the
+%% following conditions:
+%%
+%% <ul> <li> The tables must have the same name.
+%%
+%% </li> <li> The tables must contain no items.
+%%
+%% </li> <li> The tables must have the same hash key and sort key (if
+%% present).
+%%
+%% </li> <li> The tables must have DynamoDB Streams enabled
+%% (NEW_AND_OLD_IMAGES).
+%%
+%% </li> </ul>
+create_global_table(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    create_global_table(Client, Input, []).
+create_global_table(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"CreateGlobalTable">>, Input, Options).
+
 %% @doc The <code>CreateTable</code> operation adds a new table to your
 %% account. In an AWS account, table names must be unique within each region.
 %% That is, you can have two tables with same name if you create the tables
@@ -251,6 +339,17 @@ create_table(Client, Input)
 create_table(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"CreateTable">>, Input, Options).
+
+%% @doc Deletes an existing backup of a table.
+%%
+%% You can call <code>DeleteBackup</code> at a maximum rate of 10 times per
+%% second.
+delete_backup(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    delete_backup(Client, Input, []).
+delete_backup(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"DeleteBackup">>, Input, Options).
 
 %% @doc Deletes a single item in a table by primary key. You can perform a
 %% conditional delete operation that deletes the item if it exists, or if it
@@ -303,6 +402,38 @@ delete_table(Client, Input)
 delete_table(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"DeleteTable">>, Input, Options).
+
+%% @doc Describes an existing backup of a table.
+%%
+%% You can call <code>DescribeBackup</code> at a maximum rate of 10 times per
+%% second.
+describe_backup(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    describe_backup(Client, Input, []).
+describe_backup(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"DescribeBackup">>, Input, Options).
+
+%% @doc Checks the status of the backup restore settings on the specified
+%% table. If backups are enabled, <code>ContinuousBackupsStatus</code> will
+%% bet set to ENABLED.
+%%
+%% You can call <code>DescribeContinuousBackups</code> at a maximum rate of
+%% 10 times per second.
+describe_continuous_backups(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    describe_continuous_backups(Client, Input, []).
+describe_continuous_backups(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"DescribeContinuousBackups">>, Input, Options).
+
+%% @doc Returns information about the global table.
+describe_global_table(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    describe_global_table(Client, Input, []).
+describe_global_table(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"DescribeGlobalTable">>, Input, Options).
 
 %% @doc Returns the current provisioned-capacity limits for your AWS account
 %% in a region, both for the region as a whole and for any one DynamoDB table
@@ -420,6 +551,33 @@ get_item(Client, Input)
 get_item(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"GetItem">>, Input, Options).
+
+%% @doc List backups associated with an AWS account. To list backups for a
+%% given table, specify <code>TableName</code>. <code>ListBackups</code>
+%% returns a paginated list of results with at most 1MB worth of items in a
+%% page. You can also specify a limit for the maximum number of entries to be
+%% returned in a page.
+%%
+%% In the request, start time is inclusive but end time is exclusive. Note
+%% that these limits are for the time at which the original backup was
+%% requested.
+%%
+%% You can call <code>ListBackups</code> a maximum of 5 times per second.
+list_backups(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    list_backups(Client, Input, []).
+list_backups(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"ListBackups">>, Input, Options).
+
+%% @doc Lists all the global tables. Only those global tables that have
+%% replicas in the region specified as input are returned.
+list_global_tables(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    list_global_tables(Client, Input, []).
+list_global_tables(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"ListGlobalTables">>, Input, Options).
 
 %% @doc Returns an array of table names associated with the current account
 %% and endpoint. The output from <code>ListTables</code> is paginated, with
@@ -582,6 +740,32 @@ query(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"Query">>, Input, Options).
 
+%% @doc Creates a new table from an existing backup. Any number of users can
+%% execute up to 10 concurrent restores in a given account.
+%%
+%% You can call <code>RestoreTableFromBackup</code> at a maximum rate of 10
+%% times per second.
+%%
+%% You must manually set up the following on the restored table:
+%%
+%% <ul> <li> Auto scaling policies
+%%
+%% </li> <li> IAM policies
+%%
+%% </li> <li> Cloudwatch metrics and alarms
+%%
+%% </li> <li> Tags
+%%
+%% </li> <li> Time to Live (TTL) settings
+%%
+%% </li> </ul>
+restore_table_from_backup(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    restore_table_from_backup(Client, Input, []).
+restore_table_from_backup(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"RestoreTableFromBackup">>, Input, Options).
+
 %% @doc The <code>Scan</code> operation returns one or more items and item
 %% attributes by accessing every item in a table or a secondary index. To
 %% have DynamoDB return fewer items, you can provide a
@@ -650,6 +834,16 @@ untag_resource(Client, Input)
 untag_resource(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"UntagResource">>, Input, Options).
+
+%% @doc Adds or removes replicas to the specified global table. The global
+%% table should already exist to be able to use this operation. Currently,
+%% the replica to be added should be empty.
+update_global_table(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    update_global_table(Client, Input, []).
+update_global_table(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"UpdateGlobalTable">>, Input, Options).
 
 %% @doc Edits an existing item's attributes, or adds a new item to the table
 %% if it does not already exist. You can put, delete, or add attribute
@@ -742,17 +936,21 @@ update_time_to_live(Client, Input, Options)
     {error, Error, {integer(), list(), hackney:client()}} |
     {error, term()} when
     Result :: map() | undefined,
-    Error :: {undefined, undefined} | {binary(), binary()}.
-request(Client, Action, Input, Options) ->
-    Client1 = Client#{service => <<"dynamodb">>},
-    Host = get_host(<<"dynamodb">>, Client1),
-    URL = get_url(Host, Client1),
-    Headers = [{<<"Host">>, Host},
-               {<<"Content-Type">>, <<"application/x-amz-json-1.0">>},
-               {<<"X-Amz-Target">>, << <<"DynamoDB_20120810.">>/binary, Action/binary>>}],
+    Error :: {binary(), binary()}.
+request(#{ credentials := Credentials, region := Region } = Client,
+        Action, Input, Options) ->
+    Host = get_host(<<"dynamodb">>, Client),
+    Params = #{ target_api => binary_to_list(<< <<"DynamoDB_20120810.">>/binary, Action/binary>>),
+                method => "POST",
+                service => "dynamodb",
+                region => binary_to_list(Region),
+                host => binary_to_list(Host)
+              },
+    URL = get_url(Host, Client),
     Payload = jsone:encode(Input),
-    Headers1 = awsv4:headers(Client1, <<"POST">>, URL, Headers, Payload),
-    Response = lhttpc:request(post, URL, Headers1, Payload, Options),
+    Headers = awsv4:headers(Credentials, Params, Payload),
+    Headers1 = [ {<<"Content-Type">>, <<"application/x-amz-json-1.0">>} | Headers ],
+    Response = hackney:request(post, URL, Headers1, Payload, Options),
     handle_response(Response).
 
 handle_response({ok, 200, ResponseHeaders, Client}) ->
@@ -765,7 +963,7 @@ handle_response({ok, 200, ResponseHeaders, Client}) ->
     end;
 handle_response({ok, StatusCode, ResponseHeaders, Client}) ->
     {ok, Body} = hackney:body(Client),
-    Error = jsx:decode(Body, [return_maps]),
+    Error = jsone:decode(Body),
     Exception = maps:get(<<"__type">>, Error, undefined),
     Reason = maps:get(<<"message">>, Error, undefined),
     {error, {Exception, Reason}, {StatusCode, ResponseHeaders, Client}};
@@ -775,7 +973,7 @@ handle_response({error, Reason}) ->
 get_host(_EndpointPrefix, #{region := <<"local">>}) ->
     <<"localhost">>;
 get_host(EndpointPrefix, #{region := Region, endpoint := Endpoint}) ->
-    aws_util:binary_join([EndpointPrefix,
+    darcy:binary_join([EndpointPrefix,
 			  <<".">>,
 			  Region,
 			  <<".">>,
@@ -783,7 +981,7 @@ get_host(EndpointPrefix, #{region := Region, endpoint := Endpoint}) ->
 			 <<"">>).
 
 get_url(Host, Client) ->
-    Proto = maps:get(proto, Client),
+    Scheme = maps:get(scheme, Client),
     Port = maps:get(port, Client),
-    aws_util:binary_join([Proto, <<"://">>, Host, <<":">>, Port, <<"/">>],
+    darcy:binary_join([Scheme, <<"://">>, Host, <<":">>, Port, <<"/">>],
 			 <<"">>).
