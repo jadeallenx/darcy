@@ -8,8 +8,7 @@
     crypto,
     ssl,
     hackney,
-    jsone,
-    erliam
+    jsone
    ]},
   {env,[]},
   {modules, []},

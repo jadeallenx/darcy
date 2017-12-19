@@ -7,8 +7,6 @@
 
 -export([
     start/0,
-    make_client/1,
-    make_local_client/1,
     to_map/1,
     to_ddb/1,
     default_decode/1,
@@ -24,22 +22,6 @@
 
 start() ->
     application:ensure_all_started(darcy).
-
-make_client(Region) ->
-    do_make_client(Region, <<"https">>, <<"amazonaws.com">>, <<"443">>).
-
-make_local_client(Port) when is_integer(Port) ->
-    do_make_client(<<"us-east-1">>, <<"http">>, <<"localhost">>, integer_to_binary(Port));
-make_local_client(Port) ->
-    do_make_client(<<"us-east-1">>, <<"http">>, <<"localhost">>, Port).
-
-do_make_client(Region, Scheme, Endpoint, Port) ->
-    #{ credentials => erliam:credentials(),
-       region => Region,
-       scheme => Scheme,
-       port => Port,
-       endpoint => Endpoint
-     }.
 
 make_table_spec(AttributeDefs, KeySchema, Throughput, TableName, Extra) ->
     Initial = #{ <<"AttributeDefinitions">> => AttributeDefs,

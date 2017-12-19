@@ -937,19 +937,15 @@ update_time_to_live(Client, Input, Options)
     {error, term()} when
     Result :: map() | undefined,
     Error :: {binary(), binary()}.
-request(#{ credentials := Credentials, region := Region } = Client,
-        Action, Input, Options) ->
-    Host = get_host(<<"dynamodb">>, Client),
-    Params = #{ target_api => binary_to_list(<< <<"DynamoDB_20120810.">>/binary, Action/binary>>),
-                method => "POST",
-                service => "dynamodb",
-                region => binary_to_list(Region),
-                host => binary_to_list(Host)
-              },
-    URL = get_url(Host, Client),
+request(Client, Action, Input, Options) ->
+    Client1 = Client#{service => <<"dynamodb">>},
+    Host = get_host(<<"dynamodb">>, Client1),
+    URL = get_url(Host, Client1),
+    Headers = [{<<"Host">>, Host},
+               {<<"Content-Type">>, <<"application/x-amz-json-1.0">>},
+               {<<"X-Amz-Target">>, << <<"DynamoDB_20120810.">>/binary, Action/binary>>}],
     Payload = jsone:encode(Input),
-    Headers = awsv4:headers(Credentials, Params, Payload),
-    Headers1 = [ {<<"Content-Type">>, <<"application/x-amz-json-1.0">>} | Headers ],
+    Headers1 = aws_request:sign_request(Client1, <<"POST">>, URL, Headers, Payload),
     Response = hackney:request(post, URL, Headers1, Payload, Options),
     handle_response(Response).
 
@@ -973,7 +969,7 @@ handle_response({error, Reason}) ->
 get_host(_EndpointPrefix, #{region := <<"local">>}) ->
     <<"localhost">>;
 get_host(EndpointPrefix, #{region := Region, endpoint := Endpoint}) ->
-    darcy:binary_join([EndpointPrefix,
+    aws_util:binary_join([EndpointPrefix,
 			  <<".">>,
 			  Region,
 			  <<".">>,
@@ -981,7 +977,7 @@ get_host(EndpointPrefix, #{region := Region, endpoint := Endpoint}) ->
 			 <<"">>).
 
 get_url(Host, Client) ->
-    Scheme = maps:get(scheme, Client),
+    Proto = maps:get(proto, Client),
     Port = maps:get(port, Client),
-    darcy:binary_join([Scheme, <<"://">>, Host, <<":">>, Port, <<"/">>],
+    aws_util:binary_join([Proto, <<"://">>, Host, <<":">>, Port, <<"/">>],
 			 <<"">>).
