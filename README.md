@@ -12,16 +12,23 @@ nobody got time for *that*.
 
 It's *Frankensteen!*
 --------------------
-This library uses (a fork of) [erliam][1] for credential management and request
-signing, rips the Dynamo implementation off from [aws-erlang][2] (a specification 
-that thankfully hasn't changed much since 2012), [lhttpc][4] for a HTTP client
-and [jsone][3] for JSON encoding/decoding.  
+This implementation rips the Dynamo and AWS implementation off from
+[aws-erlang][1] and [jsone][2] for JSON encoding/decoding.  
 
 Use
 ---
 This library uses maps. Maps in, maps out. If you don't like maps or your
 Erlang doesn't support maps, pick one of the 239,029 other Erlang libraries
 that implement a Dynamo client without maps.
+
+    1> Client = aws_client:local_client(<<"access">>, <<"secret">>, 12000).
+    2> Key1 = darcy:to_ddb(#{ <<"Key1">> => <<"some string">> }).
+    3> Key2 = darcy:to_ddb(#{ <<"Key2">> => 42 }).
+    4> Req = #{              <<"TableName">> => <<"example">>, 
+                                   <<"Key">> => maps:merge(Key1, Key2),
+                <<"ReturnConsumedCapacity">> => "TOTAL" }.
+    5> RawItem = darcy:get_item(Client, Req).
+    6> M = darcy:clean_map(darcy:to_map(maps:get(<<"Item">>, RawItem))).
 
 Build
 -----
@@ -30,12 +37,10 @@ Build
 
 Name
 ----
-Yes, this library is named for the adorable hedgehog [Darcy][5] because she is
-quite a bit cuter than a yak. Although [baby yaks are adorable][6].
+Yes, this library is named for the adorable hedgehog [Darcy][3] because she is
+quite a bit cuter than a yak. Although [baby yaks are adorable][4].
 
-[1]: https://github.com/mrallen1/erliam
-[2]: https://github.com/jkakar/aws-erlang
-[3]: https://github.com/sile/jsone
-[4]: https://github.com/alertlogic/lhttpc
-[5]: https://www.instagram.com/darcytheflyinghedgehog/
-[6]: https://bing.com/images/search?q=baby+yaks
+[1]: https://github.com/jkakar/aws-erlang
+[2]: https://github.com/sile/jsone
+[3]: https://www.instagram.com/darcytheflyinghedgehog/
+[4]: https://bing.com/images/search?q=baby+yaks
