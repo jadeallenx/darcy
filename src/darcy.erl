@@ -8,6 +8,7 @@
 -export([
     start/0,
     to_map/1,
+    clean_map/1,
     to_ddb/1,
     default_decode/1,
     default_encode/1,
@@ -16,8 +17,7 @@
     get_item/2,
     batch_get_item/2,
     put_item/2,
-    batch_put_item/2,
-    binary_join/2
+    batch_put_item/2
 ]).
 
 start() ->
@@ -58,17 +58,41 @@ batch_get_item(Client, Request) ->
 batch_put_item(Client, Request) ->
     darcy_ddb_api:batch_put_item(Client, Request).
 
+%% @doc This function returns a map without any Dynamo specific type tuples,
+%% which is useful for passing around internally in an application that doesn't
+%% care or understand Dynamo data types.
+clean_map(M) when is_map(M) ->
+    maps:map(fun(_K, {_, V}) -> V;
+                (_K, V) -> V
+             end,
+             M).
+
+%% @doc This is the default decoding function for binary data. It base64
+%% decodes the binary, and decompresses it.
 default_decode(Blob) ->
     zlib:uncompress(base64:decode(Blob)).
 
+%% @doc This is the default encoding function for binary data. It compresses
+%% the data and base64 encodes it.
 default_encode(Data) ->
     base64:encode(zlib:compress(Data)).
 
+%% @doc Translate from a "raw" JSON map representation of a Dynamo
+%% data item to an Erlang data item.  Uses the following tuples
+%% to remove ambiguities in Erlang JSON encoding:
+%% <ul>
+%%      <li>`NULL' values are returned as `undefined'</li>
+%%      <li>`{blob, Binary}'</li>
+%%      <li>`{list, List}'</li>
+%%      <li>`{string_set, Set}' (internally stored as an ordset)</li>
+%%      <li>`{number_set, Set}' (internally stored as an ordset)</li>
+%% </ul>
 to_map(M) when is_map(M) ->
     maps:map(fun(_K, V) when is_map(V) -> unddt(V);
                 (_K, V) -> V end,
              M).
 
+%% @private
 unddt(#{ <<"B">> := V }) ->
     {M, F, A} = application:get_env(darcy, blob_decode_fun,
                                     {darcy, default_decode, []}),
@@ -84,10 +108,26 @@ unddt(#{ <<"NS">> := V }) -> {number_set, ordsets:from_list([ binary_to_integer(
 unddt(#{ <<"NULL">> := _V }) -> undefined;
 unddt(Other) -> erlang:error({error, badarg}, [Other]).
 
+%% @doc This function takes an Erlang map and attempts to encode it using Dynamo
+%% data type annotations. Because there are ambiguities in how Erlang internally
+%% represents things like strings, lists and sets, tagged tuples are used to
+%% remove ambiguity.  They are the same tagged tuples as above:
+%% <ul>
+%%      <li>`undefined' is stored as a `NULL' data type</li>
+%%      <li>`{blob, Binary}'</li>
+%%      <li>`{list, List}'</li>
+%%      <li>`{string_set, Set}' (internally stored as an ordset)</li>
+%%      <li>`{number_set, Set}' (internally stored as an ordset)</li>
+%% </ul>
+%%
+%% Generally, you should try to modify your internal data representation values
+%% to remove these ambiguities <i>before</i> you pass them into this function.
+
 to_ddb(M) when is_map(M) ->
     maps:map(fun(_K, V) -> ddt(V) end, M);
 to_ddb(Other) -> erlang:error({error, badarg}, [Other]).
 
+%% @private
 ddt(undefined) -> #{ <<"NULL">> => <<>> };
 ddt({blob, Data}) ->
     {M, F, A} = application:get_env(darcy, blob_encode_fun,
@@ -109,17 +149,3 @@ ddt(V) when is_list(V) ->
              #{ <<"L">> => [ ddt(E) || E <- V ] }
     end;
 ddt(Other) -> erlang:error({error, badarg}, [Other]).
-
-%% Quoted from https://github.com/jkakar/aws-erlang/blob/master/src/aws_util.erl
-%% Join binary values using the specified separator.
-binary_join([], _) -> <<"">>;
-binary_join([H|[]], _) -> H;
-binary_join(L, Sep) when is_list(Sep)  ->
-    binary_join(L, list_to_binary(Sep));
-binary_join([H|T], Sep) ->
-    binary_join(T, H, Sep).
-
-binary_join([], Acc, _) ->
-    Acc;
-binary_join([H|T], Acc, Sep) ->
-    binary_join(T, <<Acc/binary, Sep/binary, H/binary>>, Sep).
