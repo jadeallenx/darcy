@@ -12,51 +12,98 @@
     to_ddb/1,
     default_decode/1,
     default_encode/1,
+    make_attribute_defs/1,
+    make_key_schema/1,
+    make_provisioned_throughput/2,
+    table_name/1,
+    make_table_spec/3,
     make_table_spec/5,
     make_table_if_not_exists/2,
-    get_item/2,
-    batch_get_item/2,
+    get_item/3,
+    batch_get_items/2,
     put_item/2,
-    batch_put_item/2
+    batch_write_items/3
 ]).
 
 start() ->
     application:ensure_all_started(darcy).
 
-make_table_spec(AttributeDefs, KeySchema, Throughput, TableName, Extra) ->
-    Initial = #{ <<"AttributeDefinitions">> => AttributeDefs,
-       <<"KeySchema">> => KeySchema,
-       <<"ProvisionedThroughput">> => Throughput,
-       <<"TableName">> => TableName
-    },
-    lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, Initial, Extra).
+make_attribute_defs(Attributes) when is_list(Attributes) ->
+    #{ <<"AttributeDefinitions">> =>
+      [ #{ <<"AttributeName">> => N,
+           <<"AttributeType">> => T } || {N, T} <- Attributes ] }.
+
+make_key_schema(Schema) when is_list(Schema) ->
+    #{ <<"KeySchema">> =>
+      [ #{ <<"AttributeName">> => N,
+           <<"KeyType">> => T } || {N, T} <- Schema ] }.
+
+make_provisioned_throughput(ReadUnits, WriteUnits) ->
+    #{ <<"ProvisionedThroughput">> =>
+          #{ <<"ReadCapacityUnits">> => ReadUnits,
+         <<"WriteCapacityUnits">> => WriteUnits } }.
+
+table_name(N) when is_binary(N) -> #{ <<"TableName">> => N }.
+
+make_table_spec(TableName, Attributes, Keys) ->
+    make_table_spec(TableName, Attributes, Keys, ?DEFAULT_READ_UNITS, ?DEFAULT_WRITE_UNITS).
+
+make_table_spec(TableName, Attributes, Keys, Read, Write) ->
+    lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{},
+                [make_attribute_defs(Attributes),
+         make_key_schema(Keys),
+         make_provisioned_throughput(Read, Write),
+         table_name(TableName)]).
 
 %% @doc Make a table if it doesn't already exist.
 make_table_if_not_exists(Client, #{ <<"TableName">> := TableName} = Spec) ->
     case darcy_ddb_api:describe_table(Client, #{ <<"TableName">> => TableName }) of
-        {ok, _Result, {200,  _Headers, _NewClient}} -> ok;
-        {ok, _Error,  {400,  _Headers, _NewClient}} -> attempt_make_table(Client, Spec);
-        {ok, Error,   {Status, _Headers, _NClient}} -> {error, {table_creation_error, {Status, Error}}}
+           {ok, _Result, {200,  _Headers, _Client}} -> ok;
+        {error, _Error,  {400,  _Headers, _Client}} -> attempt_make_table(Client, Spec);
+        {error, Error,   {Status, _Headers, _NClient}} -> {error, {table_creation_error, {Status, Error}}}
     end.
 
 attempt_make_table(Client, Spec) ->
     case darcy_ddb_api:create_table(Client, Spec) of
-        {ok, _Result, {200, _Headers, _NewClient}} -> ok;
-        {ok, Error,   {Status, _Headers, _NewClient}} -> {error, {table_creation_failed, {Status, Error}}}
+           {ok, _Result, {   200, _Headers, _Client}} -> ok;
+        {error, Error,   {Status, _Headers, _NewClient}} -> {error, {table_creation_failed, {Status, Error}}}
     end.
 
 %% GET ITEM
-get_item(Client, Request) ->
-    darcy_ddb_api:get_item(Client, Request).
+get_item(Client, TableName, Key) ->
+    Request = #{ <<"TableName">> => TableName,
+                 <<"Key">> => to_ddb(maps:get(<<"Key">>, Key)) },
 
+    case darcy_ddb_api:get_item(Client, Request) of
+          {ok, #{}, {200, _Headers, _Client}} -> {ok, #{}};
+          {ok, Raw, {200, _Headers, _Client}} -> {ok, clean_map(to_map(maps:get(<<"Item">>, Raw)))};
+     {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
+    end.
+
+batch_get_items(Client, Request) ->
+    darcy_ddb_api:batch_get_item(Client, Request).
+
+%% PUT ITEM
 put_item(Client, Request) ->
     darcy_ddb_api:put_item(Client, Request).
 
-batch_get_item(Client, Request) ->
-    darcy_ddb_api:batch_get_item(Client, Request).
+%% TODO: Handle <<"UnprocessedKeys">> automatically
+batch_write_items(Client, TableName, Items) when length(Items) =< 25 ->
+    Request = make_batch_put(TableName, Items),
+    darcy_ddb_api:batch_write_item(Client, Request);
+batch_write_items(Client, TableName, Items) ->
+    {Part, Tail} = lists:split(25, Items),
+    batch_write_items(Client, TableName, Part),
+    batch_write_items(Client, TableName, Tail).
 
-batch_put_item(Client, Request) ->
-    darcy_ddb_api:batch_put_item(Client, Request).
+make_batch_put(TableName, Items) when length(Items) =< 25 ->
+    #{ <<"RequestItems">> =>
+       #{ TableName => [
+             #{ <<"PutRequest">> =>
+                #{ <<"Item">> => to_ddb(I) }
+              } || I <- Items ]
+        }
+     }.
 
 %% @doc This function returns a map without any Dynamo specific type tuples,
 %% which is useful for passing around internally in an application that doesn't
@@ -103,8 +150,8 @@ unddt(#{ <<"BOOL">> := <<"true">> }) -> true;
 unddt(#{ <<"BOOL">> := <<"false">> }) -> false;
 unddt(#{ <<"L">> := V }) -> {list, [ unddt(E) || E <- V ]};
 unddt(#{ <<"M">> := V }) -> maps:map(fun(_K, Val) -> unddt(Val) end, V);
-unddt(#{ <<"SS">> := V }) -> {string_set, ordsets:from_list([ E || E <- V ])};
-unddt(#{ <<"NS">> := V }) -> {number_set, ordsets:from_list([ binary_to_integer(E) || E <- V ])};
+unddt(#{ <<"SS">> := V }) -> {string_set, ?SET:from_list([ E || E <- V ])};
+unddt(#{ <<"NS">> := V }) -> {number_set, ?SET:from_list([ binary_to_integer(E) || E <- V ])};
 unddt(#{ <<"NULL">> := _V }) -> undefined;
 unddt(Other) -> erlang:error({error, badarg}, [Other]).
 
@@ -134,8 +181,8 @@ ddt({blob, Data}) ->
                                     {darcy, default_encode, []}),
     #{ <<"B">> => erlang:apply(M, F, [ Data | A ]) };
 ddt({list, L}) -> #{ <<"L">> => [ ddt(E) || E <- L ] };
-ddt({string_set, S}) -> #{ <<"SS">> => [ ddt(E) || E <- ordsets:to_list(S) ] };
-ddt({number_set, S}) -> #{ <<"NS">> => [ ddt(E) || E <- ordsets:to_list(S) ] };
+ddt({string_set, S}) -> #{ <<"SS">> => [ ddt(E) || E <- ?SET:to_list(S) ] };
+ddt({number_set, S}) -> #{ <<"NS">> => [ ddt(E) || E <- ?SET:to_list(S) ] };
 ddt(V) when is_integer(V) -> #{ <<"N">> => V };
 ddt(V) when is_float(V) -> #{ <<"N">> => V };
 ddt(V) when is_binary(V) -> #{ <<"S">> => V };
@@ -149,3 +196,26 @@ ddt(V) when is_list(V) ->
              #{ <<"L">> => [ ddt(E) || E <- V ] }
     end;
 ddt(Other) -> erlang:error({error, badarg}, [Other]).
+
+%% Tests
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+to_map_test() ->
+    Raw = #{<<"Grades">> => #{<<"L">> => [#{<<"N">> => <<"17">>}, #{<<"N">> => <<"39">>}, #{<<"N">> => <<"76">>}, #{<<"N">> => <<"27">>}]},
+            <<"Student">> => #{<<"S">> => <<"Quentin">>},
+            <<"Subject">> => #{<<"S">> => <<"Science">>}},
+    Expected = #{ <<"Grades">> => {list, [17, 39, 76, 27]},
+                  <<"Student">> => <<"Quentin">>,
+                  <<"Subject">> => <<"Science">> },
+    ?assertEqual(Expected, to_map(Raw)).
+
+clean_map_test() ->
+    Raw = #{<<"Grades">> => #{<<"L">> => [#{<<"N">> => <<"17">>}, #{<<"N">> => <<"39">>}, #{<<"N">> => <<"76">>}, #{<<"N">> => <<"27">>}]},
+            <<"Student">> => #{<<"S">> => <<"Quentin">>},
+            <<"Subject">> => #{<<"S">> => <<"Science">>}},
+    Expected = #{ <<"Grades">> => [17, 39, 76, 27],
+                  <<"Student">> => <<"Quentin">>,
+                  <<"Subject">> => <<"Science">> },
+    ?assertEqual(Expected, clean_map(to_map(Raw))).
+-endif.
