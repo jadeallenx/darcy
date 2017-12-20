@@ -25,7 +25,8 @@
     get_item/3,
     batch_get_items/2,
     put_item/3,
-    batch_write_items/3
+    batch_write_items/3,
+    query/4
 ]).
 
 start() ->
@@ -123,10 +124,10 @@ put_item(Client, TableName, Item) ->
     {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
     end.
 
-%% TODO: Handle <<"UnprocessedKeys">> automatically
 batch_write_items(Client, TableName, Items) when length(Items) =< 25 ->
     Request = make_batch_put(TableName, Items),
-    darcy_ddb_api:batch_write_item(Client, Request);
+    Result = darcy_ddb_api:batch_write_item(Client, Request),
+    handle_batch_write_result(Client, ?RETRIES, Result);
 batch_write_items(Client, TableName, Items) ->
     {Part, Tail} = lists:split(25, Items),
     batch_write_items(Client, TableName, Part),
@@ -141,8 +142,35 @@ make_batch_put(TableName, Items) when length(Items) =< 25 ->
         }
      }.
 
+handle_batch_write_result(_Client, _N,
+                          {ok, #{ <<"UnprocessedItems">> := U }, _Details})
+                          when map_size(U) == 0 -> ok;
+
+handle_batch_write_result(Client, N,
+                          {ok, #{ <<"UnprocessedItems">> := U }, _Details}) ->
+                          reprocess_batch_write(Client, N, U);
+
+handle_batch_write_result(_Client, _N,
+                           {error, Error, {Status, Headers, _Ref}}) ->
+                           {error, {Error, [Status, Headers]}}.
+
+reprocess_batch_write(_Client, 0, RetryItems) -> {error, {retries_exceeded, RetryItems}};
+reprocess_batch_write(Client, N, RetryItems) ->
+    Results = darcy_ddb_api:batch_write_item(Client, #{ <<"RequestItems">> => RetryItems }),
+    handle_batch_write_result(Client, N-1, Results).
+
+
+
 return_value(#{ <<"Item">> := Item }) -> clean_map(to_map(Item));
-return_value(#{}) -> #{}.
+return_value(#{} = M) when map_size(M) == 0 -> #{}.
+
+query(Client, TableName, IndexName, Expr) ->
+    Request = lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{},
+                          [table_name(TableName),
+                           index_name(IndexName),
+                           Expr]),
+    darcy_ddb_api:query(Client, Request).
+
 
 %% @doc This function returns a map without any Dynamo specific type tuples,
 %% which is useful for passing around internally in an application that doesn't
