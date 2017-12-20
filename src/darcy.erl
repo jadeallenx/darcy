@@ -18,6 +18,9 @@
     table_name/1,
     make_table_spec/3,
     make_table_spec/5,
+    make_global_index_spec/3,
+    make_global_index_spec/5,
+    add_global_index/2,
     make_table_if_not_exists/2,
     get_item/3,
     batch_get_items/2,
@@ -33,7 +36,12 @@ make_attribute_defs(Attributes) when is_list(Attributes) ->
       [ #{ <<"AttributeName">> => N,
            <<"AttributeType">> => T } || {N, T} <- Attributes ] }.
 
-make_key_schema(Schema) when is_list(Schema) ->
+make_key_schema([HashKey]) ->
+    make_schema_impl([{HashKey, <<"HASH">>}]);
+make_key_schema([HashKey, RangeKey]) ->
+    make_schema_impl([{HashKey, <<"HASH">>}, {RangeKey, <<"RANGE">>}]).
+
+make_schema_impl(Schema) ->
     #{ <<"KeySchema">> =>
       [ #{ <<"AttributeName">> => N,
            <<"KeyType">> => T } || {N, T} <- Schema ] }.
@@ -46,19 +54,43 @@ make_provisioned_throughput(ReadUnits, WriteUnits) ->
 table_name(N) when is_binary(N) -> #{ <<"TableName">> => N }.
 
 make_table_spec(TableName, Attributes, Keys) ->
-    make_table_spec(TableName, Attributes, Keys, ?DEFAULT_READ_UNITS, ?DEFAULT_WRITE_UNITS).
+    make_table_spec(TableName, Attributes, Keys,
+                    ?DEFAULT_READ_UNITS, ?DEFAULT_WRITE_UNITS).
 
 make_table_spec(TableName, Attributes, Keys, Read, Write) ->
     lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{},
                 [make_attribute_defs(Attributes),
-         make_key_schema(Keys),
-         make_provisioned_throughput(Read, Write),
-         table_name(TableName)]).
+                 make_key_schema(Keys),
+                 make_provisioned_throughput(Read, Write),
+                 table_name(TableName)]).
+
+make_global_index_spec(IndexName, Keys, ProjectionSpec) ->
+    make_global_index_spec(IndexName, Keys, ProjectionSpec,
+                           ?DEFAULT_READ_UNITS, ?DEFAULT_WRITE_UNITS).
+
+make_global_index_spec(IndexName, Keys, ProjectionSpec, Read, Write) ->
+    lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{},
+                [make_key_schema(Keys),
+                 make_provisioned_throughput(Read, Write),
+                 make_projection(ProjectionSpec),
+                 index_name(IndexName)]).
+
+add_global_index(#{ <<"GlobalSecondaryIndexes">> := CurrentGSI } = TableSpec, GSISpec) ->
+    maps:put(<<"GlobalSecondaryIndexes">>, [ GSISpec | CurrentGSI ], TableSpec);
+add_global_index(TableSpec, GSISpec) ->
+    maps:put(<<"GlobalSecondaryIndexes">>, [ GSISpec ], TableSpec).
+
+index_name(N) when is_binary(N) -> #{ <<"IndexName">> => N }.
+
+make_projection({}) -> #{ <<"Projection">> => #{} };
+make_projection({Attr, <<"INCLUDE">>}) -> #{ <<"Projection">> => #{ <<"NonKeyAttributes">> => Attr,
+                                                                    <<"ProjectionType">> => <<"INCLUDE">> } };
+make_projection({[], T}) -> #{ <<"Projection">> => #{ <<"ProjectionType">> => T } }.
 
 %% @doc Make a table if it doesn't already exist.
 make_table_if_not_exists(Client, #{ <<"TableName">> := TableName} = Spec) ->
     case darcy_ddb_api:describe_table(Client, #{ <<"TableName">> => TableName }) of
-           {ok, _Result, {200,  _Headers, _Client}} -> ok;
+           {ok, _Result, _Details} -> ok;
         {error, _Error,  {400,  _Headers, _Client}} -> attempt_make_table(Client, Spec);
         {error, Error,   {Status, _Headers, _NClient}} -> {error, {table_creation_error, {Status, Error}}}
     end.

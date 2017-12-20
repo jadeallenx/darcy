@@ -47,7 +47,7 @@ batch_test() ->
     _ = darcy:start(),
     Client = aws_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
     Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }],
-    Keys = [{ <<"Student">>, <<"HASH">> }, { <<"Subject">>, <<"RANGE">> }],
+    Keys = [<<"Student">>, <<"Subject">>],
     TableSpec = darcy:make_table_spec(<<"Grades">>, Attributes, Keys),
     ok = darcy:make_table_if_not_exists(Client, TableSpec),
     Students = [ make_item(one_of(names()), one_of(subjects())) ||
@@ -73,7 +73,7 @@ example_test() ->
     _ = darcy:start(),
     Client = aws_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
     Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }],
-    Keys = [{ <<"Student">>, <<"HASH">> }, { <<"Subject">>, <<"RANGE">> }],
+    Keys = [<<"Student">>, <<"Subject">>],
     TableSpec = darcy:make_table_spec(<<"Grades">>, Attributes, Keys),
     ok = darcy:make_table_if_not_exists(Client, TableSpec),
     Grades = #{ <<"Student">> => <<"Foo">>, <<"Subject">> => <<"Bar">>,
