@@ -29,7 +29,7 @@ the unit test.)
     1> darcy:start().
     2> Client = aws_client:local_client(<<"access">>, <<"secret">>, <<"12000">>).
     3> Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }].
-    4> Keys = [{ <<"Student">>, <<"HASH">> }, { <<"Subject">>, <<"RANGE">> }],
+    4> Keys = [<"Student">>, { <<"Subject">>],
     5> TableSpec = darcy:make_table_spec(<<"Grades">>, Attributes, Keys).
     6> ok = darcy:make_table_if_not_exists(Client, TableSpec).
     7> Grades = #{ <<"Student">> => <<"Alice">>, <<"Subject">> => <<"Math">>, <<"Grades">> => {list, [75, 80, 90]} }.
