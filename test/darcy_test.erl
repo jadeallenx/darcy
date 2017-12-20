@@ -38,7 +38,12 @@ to_map([H|T], Acc) ->
     end,
     to_map(T, NewAcc).
 
-example_test() ->
+lookup_item(Records) ->
+    Name = one_of(maps:keys(Records)),
+    Subject = one_of(ordsets:to_list(maps:get(Name, Records))),
+    {Name, Subject}.
+
+batch_test() ->
     _ = darcy:start(),
     Client = aws_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
     Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }],
@@ -47,26 +52,34 @@ example_test() ->
     ok = darcy:make_table_if_not_exists(Client, TableSpec),
     Students = [ make_item(one_of(names()), one_of(subjects())) ||
                  _ <- lists:seq(1, 30) ],
-    ?debugFmt("students:~p", [Students]),
+    %?debugFmt("students:~p", [Students]),
     Records = make_map(Students),
-    ?debugFmt("records: ~p", [Records]),
-    Result = darcy:batch_write_items(Client, <<"Grades">>, Students),
-    ?debugFmt("batch write result: ~p", [Result]),
+    %?debugFmt("records: ~p", [Records]),
+    _ = darcy:batch_write_items(Client, <<"Grades">>, Students),
+    %?debugFmt("batch write result: ~p", [Result]),
 
     Lookups = [ lookup_item(Records) || _ <- lists:seq(1, 10) ],
-    ?debugFmt("lookups: ~p", [Lookups]),
     Result1 = lists:map(fun({N, S}) ->
-                     darcy:get_item(Client, <<"Grades">>,
-                                    #{ <<"Key">> => #{ <<"Student">> => N,
-                                                       <<"Subject">> => S } })
-                  end,
-                  Lookups),
+                            darcy:get_item(Client,
+                                           <<"Grades">>,
+                                           #{ <<"Student">> => N, <<"Subject">> => S })
+                        end,
+                        Lookups),
 
-    ?debugFmt("get item: ~p", [Result1]),
+    ?debugFmt("get item results: ~p", [Result1]),
     ok.
 
-lookup_item(Records) ->
-    Name = one_of(maps:keys(Records)),
-    Subject = one_of(ordsets:to_list(maps:get(Name, Records))),
-    {Name, Subject}.
+example_test() ->
+    _ = darcy:start(),
+    Client = aws_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
+    Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }],
+    Keys = [{ <<"Student">>, <<"HASH">> }, { <<"Subject">>, <<"RANGE">> }],
+    TableSpec = darcy:make_table_spec(<<"Grades">>, Attributes, Keys),
+    ok = darcy:make_table_if_not_exists(Client, TableSpec),
+    Grades = #{ <<"Student">> => <<"Foo">>, <<"Subject">> => <<"Bar">>,
+                <<"Grades">> => {list, [75,80,90]} },
+    ok = darcy:put_item(Client, <<"Grades">>, Grades),
+    {ok, Result} = darcy:get_item(Client, <<"Grades">>, #{ <<"Student">> => <<"Foo">>,
+                                                           <<"Subject">> => <<"Bar">> }),
+    ?assertEqual(darcy:clean_map(Grades), Result).
 

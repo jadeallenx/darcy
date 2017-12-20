@@ -21,7 +21,7 @@
     make_table_if_not_exists/2,
     get_item/3,
     batch_get_items/2,
-    put_item/2,
+    put_item/3,
     batch_write_items/3
 ]).
 
@@ -72,20 +72,24 @@ attempt_make_table(Client, Spec) ->
 %% GET ITEM
 get_item(Client, TableName, Key) ->
     Request = #{ <<"TableName">> => TableName,
-                 <<"Key">> => to_ddb(maps:get(<<"Key">>, Key)) },
+                 <<"Key">> => to_ddb(Key) },
 
     case darcy_ddb_api:get_item(Client, Request) of
-          {ok, #{}, {200, _Headers, _Client}} -> {ok, #{}};
-          {ok, Raw, {200, _Headers, _Client}} -> {ok, clean_map(to_map(maps:get(<<"Item">>, Raw)))};
-     {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
+          {ok, Raw, _Details} -> {ok, return_value(Raw)};
+          {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
     end.
 
 batch_get_items(Client, Request) ->
     darcy_ddb_api:batch_get_item(Client, Request).
 
 %% PUT ITEM
-put_item(Client, Request) ->
-    darcy_ddb_api:put_item(Client, Request).
+put_item(Client, TableName, Item) ->
+    Request = #{ <<"TableName">> => TableName,
+                 <<"Item">> => to_ddb(Item) },
+    case darcy_ddb_api:put_item(Client, Request) of
+         {ok, #{}, {200, _Headers, _Client}} -> ok;
+    {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
+    end.
 
 %% TODO: Handle <<"UnprocessedKeys">> automatically
 batch_write_items(Client, TableName, Items) when length(Items) =< 25 ->
@@ -104,6 +108,9 @@ make_batch_put(TableName, Items) when length(Items) =< 25 ->
               } || I <- Items ]
         }
      }.
+
+return_value(#{ <<"Item">> := Item }) -> clean_map(to_map(Item));
+return_value(#{}) -> #{}.
 
 %% @doc This function returns a map without any Dynamo specific type tuples,
 %% which is useful for passing around internally in an application that doesn't
