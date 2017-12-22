@@ -162,7 +162,7 @@ reprocess_batch_write(Client, N, RetryItems) ->
 
 
 return_value(#{ <<"Item">> := Item }) -> clean_map(to_map(Item));
-return_value(#{} = M) when map_size(M) == 0 -> #{}.
+return_value(#{} = M) when map_size(M) == 0 -> {error, not_found}.
 
 query(Client, TableName, IndexName, Expr) ->
     Request = lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{},
