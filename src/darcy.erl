@@ -108,7 +108,7 @@ get_item(Client, TableName, Key) ->
                  <<"Key">> => to_ddb(Key) },
 
     case darcy_ddb_api:get_item(Client, Request) of
-          {ok, Raw, _Details} -> {ok, return_value(Raw)};
+          {ok, Raw, _Details} -> return_value(Raw);
           {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
     end.
 
@@ -161,7 +161,7 @@ reprocess_batch_write(Client, N, RetryItems) ->
 
 
 
-return_value(#{ <<"Item">> := Item }) -> clean_map(to_map(Item));
+return_value(#{ <<"Item">> := Item }) -> {ok, clean_map(to_map(Item))};
 return_value(#{} = M) when map_size(M) == 0 -> {error, not_found}.
 
 query(Client, TableName, IndexName, Expr) ->
