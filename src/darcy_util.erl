@@ -1,4 +1,4 @@
--module(aws_util).
+-module(darcy_util).
 
 -export([base16/1,
          binary_join/2,
@@ -24,7 +24,7 @@ binary_join([H|T], Sep) ->
 
 %% Create an HMAC-SHA256 hexdigest for Key and Message.
 hmac_sha256_hexdigest(Key, Message) ->
-    aws_util:base16(hmac_sha256(Key, Message)).
+    base16(hmac_sha256(Key, Message)).
 
 %% Create an HMAC-SHA256 hexdigest for Key and Message.
 hmac_sha256(Key, Message) ->
@@ -32,7 +32,7 @@ hmac_sha256(Key, Message) ->
 
 %% Create a SHA256 hexdigest for Value.
 sha256_hexdigest(Value) ->
-    aws_util:base16(crypto:hash(sha256, Value)).
+    base16(crypto:hash(sha256, Value)).
 
 %%====================================================================
 %% Internal functions

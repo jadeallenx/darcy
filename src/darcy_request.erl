@@ -1,4 +1,4 @@
--module(aws_request).
+-module(darcy_request).
 
 -export([sign_request/5]).
 
@@ -34,12 +34,12 @@ sign_request(AccessKeyID, SecretAccessKey, Region, Service, Token, Now,
     ShortDate = list_to_binary(ec_date:format("Ymd", Now)),
     Headers1 = add_date_header(Headers, LongDate),
     CanonicalRequest = canonical_request(Method, URL, Headers1, Body),
-    HashedCanonicalRequest = aws_util:sha256_hexdigest(CanonicalRequest),
+    HashedCanonicalRequest = darcy_util:sha256_hexdigest(CanonicalRequest),
     CredentialScope = credential_scope(ShortDate, Region, Service),
     SigningKey = signing_key(SecretAccessKey, ShortDate, Region, Service),
     StringToSign = string_to_sign(LongDate, CredentialScope,
                                   HashedCanonicalRequest),
-    Signature = aws_util:hmac_sha256_hexdigest(SigningKey, StringToSign),
+    Signature = darcy_util:hmac_sha256_hexdigest(SigningKey, StringToSign),
     SignedHeaders = signed_headers(Headers1),
     Authorization = authorization(AccessKeyID, CredentialScope, SignedHeaders,
                                   Signature),
@@ -79,21 +79,21 @@ authorization(AccessKeyID, CredentialScope, SignedHeaders, Signature) ->
 %% format, a region identifier and a service identifier.
 signing_key(SecretAccessKey, ShortDate, Region, Service) ->
     SigningKey = << <<"AWS4">>/binary, SecretAccessKey/binary>>,
-    SignedDate = aws_util:hmac_sha256(SigningKey, ShortDate),
-    SignedRegion = aws_util:hmac_sha256(SignedDate, Region),
-    SignedService = aws_util:hmac_sha256(SignedRegion, Service),
-    aws_util:hmac_sha256(SignedService, <<"aws4_request">>).
+    SignedDate = darcy_util:hmac_sha256(SigningKey, ShortDate),
+    SignedRegion = darcy_util:hmac_sha256(SignedDate, Region),
+    SignedService = darcy_util:hmac_sha256(SignedRegion, Service),
+    darcy_util:hmac_sha256(SignedService, <<"aws4_request">>).
 
 %% Generate a credential scope from a short date in YYMMDD format, a
 %% region identifier and a service identifier.
 credential_scope(ShortDate, Region, Service) ->
-    aws_util:binary_join([ShortDate, Region, Service, <<"aws4_request">>],
+    darcy_util:binary_join([ShortDate, Region, Service, <<"aws4_request">>],
                          "/").
 
 %% Generate the text to sign from a long date in YYMMDDTHHMMSSZ format, a
 %% credential scope and a hashed canonical request.
 string_to_sign(LongDate, CredentialScope, HashedCanonicalRequest) ->
-    aws_util:binary_join([<<"AWS4-HMAC-SHA256">>, LongDate, CredentialScope,
+    darcy_util:binary_join([<<"AWS4-HMAC-SHA256">>, LongDate, CredentialScope,
                           HashedCanonicalRequest],
                          "\n").
 
@@ -103,8 +103,8 @@ canonical_request(Method, URL, Headers, Body) ->
     {CanonicalURL, CanonicalQueryString} = split_url(URL),
     CanonicalHeaders = canonical_headers(Headers),
     SignedHeaders = signed_headers(Headers),
-    PayloadHash = aws_util:sha256_hexdigest(Body),
-    aws_util:binary_join([Method, CanonicalURL, CanonicalQueryString,
+    PayloadHash = darcy_util:sha256_hexdigest(Body),
+    darcy_util:binary_join([Method, CanonicalURL, CanonicalQueryString,
                           CanonicalHeaders, SignedHeaders, PayloadHash],
                          <<"\n">>).
 
@@ -134,7 +134,7 @@ canonical_header({Name, Value}) ->
 %% and trailing whitespace around names is stripped, header names are
 %% lowercased, and header names are semicolon-joined in alphabetical order.
 signed_headers(Headers) ->
-    aws_util:binary_join(lists:sort(lists:map(fun signed_header/1, Headers)),
+    darcy_util:binary_join(lists:sort(lists:map(fun signed_header/1, Headers)),
                          <<";">>).
 
 %% Strip leading and trailing whitespace around Name and convert it to
@@ -248,7 +248,7 @@ string_to_sign_test() ->
                          [{<<"Host">>, <<"example.com">>},
                           {<<"X-Amz-Date">>, <<"20150325T105958Z">>}],
                          <<"">>),
-    HashedCanonicalRequest = aws_util:sha256_hexdigest(CanonicalRequest),
+    HashedCanonicalRequest = darcy_util:sha256_hexdigest(CanonicalRequest),
     ?assertEqual
        (<< <<"AWS4-HMAC-SHA256">>/binary, <<"\n">>/binary,
            LongDate/binary, <<"\n">>/binary,
@@ -260,7 +260,7 @@ string_to_sign_test() ->
 %% a canonical request for AWS signature version 4
 canonical_request_test() ->
     ?assertEqual(
-       aws_util:binary_join(
+       darcy_util:binary_join(
          [<<"GET">>,
           <<"/">>,
           <<"">>,

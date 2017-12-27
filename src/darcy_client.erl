@@ -1,4 +1,4 @@
--module(aws_client).
+-module(darcy_client).
 
 -export([make_client/3, make_temporary_client/4,
 	 make_local_client/3]).

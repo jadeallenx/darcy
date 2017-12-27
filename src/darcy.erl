@@ -22,10 +22,13 @@
     make_global_index_spec/5,
     add_global_index/2,
     make_table_if_not_exists/2,
+    describe_table/2,
+    delete_table/2,
     get_item/3,
     batch_get_items/2,
     put_item/3,
     batch_write_items/3,
+    query/3,
     query/4
 ]).
 
@@ -89,6 +92,8 @@ make_projection({Attr, <<"INCLUDE">>}) -> #{ <<"Projection">> => #{ <<"NonKeyAtt
 make_projection({[], T}) -> #{ <<"Projection">> => #{ <<"ProjectionType">> => T } }.
 
 %% @doc Make a table if it doesn't already exist.
+-spec make_table_if_not_exists( Client :: darcy_client:aws_client(),
+                                TableName :: binary() ) -> ok | {error, Error :: term()}.
 make_table_if_not_exists(Client, #{ <<"TableName">> := TableName} = Spec) ->
     case darcy_ddb_api:describe_table(Client, #{ <<"TableName">> => TableName }) of
            {ok, _Result, _Details} -> ok;
@@ -100,6 +105,24 @@ attempt_make_table(Client, Spec) ->
     case darcy_ddb_api:create_table(Client, Spec) of
            {ok, _Result, {   200, _Headers, _Client}} -> ok;
         {error, Error,   {Status, _Headers, _NewClient}} -> {error, {table_creation_failed, {Status, Error}}}
+    end.
+
+%% @doc Delete a Dynamo table with the given name.
+-spec delete_table(    Client :: darcy_client:aws_client(),
+                    TableName :: binary() ) -> ok | {error, Error :: term()}.
+delete_table(Client, TableName) ->
+    case darcy_ddb_api:delete_table(Client, table_name(TableName)) of
+        {ok, #{ <<"TableDescription">> := Desc }, Details} -> ensure_deleting_state(Desc, Details);
+        {error,              Error, {Status, _Headers, _C}} -> {error, {table_deletion_error, {Status, Error}}}
+    end.
+
+ensure_deleting_state( #{ <<"TableStatus">> := <<"DELETING">> }, _Details ) -> ok;
+ensure_deleting_state( Other , {Status, _Headers, _C} ) -> {error, {table_deletion_error, {Status, Other}}}.
+
+describe_table(Client, TableName) ->
+    case darcy_ddb_api:describe_table(Client, table_name(TableName)) of
+         {ok, Result, _Details                  } -> {ok, Result};
+      {error,  Error, {Status, _Headers, Client}} -> {error, {table_description_error, {Status, Error}}}
     end.
 
 %% GET ITEM
@@ -130,7 +153,7 @@ batch_write_items(Client, TableName, Items) when length(Items) =< 25 ->
     handle_batch_write_result(Client, ?RETRIES, Result);
 batch_write_items(Client, TableName, Items) ->
     {Part, Tail} = lists:split(25, Items),
-    batch_write_items(Client, TableName, Part),
+    ok = batch_write_items(Client, TableName, Part),
     batch_write_items(Client, TableName, Tail).
 
 make_batch_put(TableName, Items) when length(Items) =< 25 ->
@@ -164,11 +187,14 @@ reprocess_batch_write(Client, N, RetryItems) ->
 return_value(#{ <<"Item">> := Item }) -> {ok, clean_map(to_map(Item))};
 return_value(#{} = M) when map_size(M) == 0 -> {error, not_found}.
 
+query(Client, TableName, Expr) ->
+    query_impl(Client, [table_name(TableName), Expr]).
+
 query(Client, TableName, IndexName, Expr) ->
-    Request = lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{},
-                          [table_name(TableName),
-                           index_name(IndexName),
-                           Expr]),
+    query_impl(Client, [table_name(TableName), index_name(IndexName), Expr]).
+
+query_impl(Client, Ops) ->
+    Request = lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{}, Ops),
     darcy_ddb_api:query(Client, Request).
 
 
@@ -211,7 +237,14 @@ unddt(#{ <<"B">> := V }) ->
     {M, F, A} = application:get_env(darcy, blob_decode_fun,
                                     {darcy, default_decode, []}),
     {blob, erlang:apply(M, F, [V | A])};
-unddt(#{ <<"N">> := V }) -> binary_to_integer(V);
+unddt(#{ <<"N">> := V }) ->
+    %% could be an integer or a float. Try integer conversion
+    %% first.
+    try
+        binary_to_integer(V)
+    catch
+        error:badarg -> binary_to_float(V)
+    end;
 unddt(#{ <<"S">> := V }) -> V;
 unddt(#{ <<"BOOL">> := <<"true">> }) -> true;
 unddt(#{ <<"BOOL">> := <<"false">> }) -> false;

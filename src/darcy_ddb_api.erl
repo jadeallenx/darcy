@@ -931,7 +931,7 @@ update_time_to_live(Client, Input, Options)
 %% Internal functions
 %%====================================================================
 
--spec request(aws_client:aws_client(), binary(), map(), list()) ->
+-spec request(darcy_client:aws_client(), binary(), map(), list()) ->
     {ok, Result, {integer(), list(), hackney:client()}} |
     {error, Error, {integer(), list(), hackney:client()}} |
     {error, term()} when
@@ -945,7 +945,7 @@ request(Client, Action, Input, Options) ->
                {<<"Content-Type">>, <<"application/x-amz-json-1.0">>},
                {<<"X-Amz-Target">>, << <<"DynamoDB_20120810.">>/binary, Action/binary>>}],
     Payload = jsone:encode(Input),
-    Headers1 = aws_request:sign_request(Client1, <<"POST">>, URL, Headers, Payload),
+    Headers1 = darcy_request:sign_request(Client1, <<"POST">>, URL, Headers, Payload),
     Response = hackney:request(post, URL, Headers1, Payload, Options),
     handle_response(Response).
 
@@ -969,7 +969,7 @@ handle_response({error, Reason}) ->
 get_host(_EndpointPrefix, #{region := <<"local">>}) ->
     <<"localhost">>;
 get_host(EndpointPrefix, #{region := Region, endpoint := Endpoint}) ->
-    aws_util:binary_join([EndpointPrefix,
+    darcy_util:binary_join([EndpointPrefix,
 			  <<".">>,
 			  Region,
 			  <<".">>,
@@ -979,5 +979,5 @@ get_host(EndpointPrefix, #{region := Region, endpoint := Endpoint}) ->
 get_url(Host, Client) ->
     Proto = maps:get(proto, Client),
     Port = maps:get(port, Client),
-    aws_util:binary_join([Proto, <<"://">>, Host, <<":">>, Port, <<"/">>],
+    darcy_util:binary_join([Proto, <<"://">>, Host, <<":">>, Port, <<"/">>],
 			 <<"">>).
