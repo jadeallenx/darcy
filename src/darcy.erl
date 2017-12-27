@@ -195,8 +195,16 @@ query(Client, TableName, IndexName, Expr) ->
 
 query_impl(Client, Ops) ->
     Request = lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{}, Ops),
-    darcy_ddb_api:query(Client, Request).
+    case darcy_ddb_api:query(Client, Request) of
+         {ok, Result, _Details                  } -> process_result_set(Result);
+      {error,  Error, {Status, Headers, _Client}} -> {error, {Error, {Status, Headers}}}
+    end.
 
+process_result_set(#{ <<"Count">> := C }) when C == 0 -> {error, not_found};
+process_result_set(#{ <<"Items">> := Items, <<"Count">> := C }) ->
+    {ok, #{ <<"Count">> => C, <<"Items">> => [ clean_map(to_map(I)) || I <- Items ] } };
+process_result_set(Other) ->
+    {error, {query_error, Other}}.
 
 %% @doc This function returns a map without any Dynamo specific type tuples,
 %% which is useful for passing around internally in an application that doesn't

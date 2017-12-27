@@ -59,6 +59,15 @@ same_count(Expected, #{ <<"Table">> := D }) ->
     #{ <<"ItemCount">> := C } = D,
     Expected == C.
 
+make_random_query(Records) ->
+    R = one_of(Records),
+    Name = maps:get(<<"Student">>, R),
+    KV = <<"Student = :sn">>,
+    EV = darcy:to_ddb(#{ <<":sn">> => Name }),
+    {#{ <<"KeyConditionExpression">> => KV,
+       <<"ExpressionAttributeValues">> => EV },
+     find_student(Name, Records)}.
+
 batch_test() ->
     _ = darcy:start(),
     Client = darcy_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
@@ -68,13 +77,13 @@ batch_test() ->
     TableSpec = darcy:make_table_spec(TableId, Attributes, Keys),
     ok = darcy:make_table_if_not_exists(Client, TableSpec),
     Students = [ make_item(one_of(names()), one_of(subjects())) ||
-                 _ <- lists:seq(1, 30) ],
+                 _ <- lists:seq(1, 65) ],
     Records = deduplicate(Students),
     ok = darcy:batch_write_items(Client, TableId, Records),
     {ok, Desc} = darcy:describe_table(Client, TableId),
     ?assert(same_count(length(Records), Desc)),
 
-    Lookups = ordsets:from_list([ lookup_item(Records) || _ <- lists:seq(1, 10) ]),
+    Lookups = [ lookup_item(Records) || _ <- lists:seq(1, 20) ],
     Result1 = lists:map(fun({N, S}) ->
                                 darcy:get_item(Client,
                                            TableId,
@@ -86,6 +95,12 @@ batch_test() ->
                               (_)  -> false
                       end,
                       Result1)),
+
+    {Cond, Expected} = make_random_query(Records),
+    {ok, #{ <<"Count">> := C, <<"Items">> := I } } = darcy:query(Client, TableId, Cond),
+    ?assert(length(Expected) == C),
+    ?assert(lists:sort([ darcy:clean_map(E) || E <- Expected ] ) == lists:sort(I)),
+
     %% gives "ACTIVE" status instead of "DELETING"
     _ = darcy:delete_table(Client, TableId).
 
