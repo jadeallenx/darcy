@@ -1,5 +1,10 @@
 %% @doc This is the main API for the library.
 %%
+%% You can think of this module as an abstraction layer
+%% on the raw API which attempts to add some convenience
+%% to plumbing the entire thing by hand-coding maps with
+%% the appropriate AWS magic.
+%%
 %% The low level API calls are in `darcy_ddb_api.erl', but generally
 %% users shouldn't call those directly.
 -module(darcy).
@@ -32,14 +37,38 @@
     query/4
 ]).
 
+-type lookup_value() :: integer() | float() | binary() | {blob, binary()}.
+-type set_value() :: {number_set, [ integer() | float() ] } | {string_set, [ binary() ]}.
+-type list_value() :: {list, [ map() | set_value() | lookup_value() ]}.
+
+%% @doc Convenience function to start `darcy' and all
+%% of its dependent applications.
 start() ->
     application:ensure_all_started(darcy).
 
+%% @doc Return a map with the key of `AttributeDefinitions'
+%% suitable for using in a table or index specification.
+-spec make_attribute_defs(
+        [ { AttributeName :: binary(),
+            AttributeType :: <<"N">> | <<"S">> | <<"B">> } ]
+       ) -> AttributeDefinitions :: map().
 make_attribute_defs(Attributes) when is_list(Attributes) ->
     #{ <<"AttributeDefinitions">> =>
       [ #{ <<"AttributeName">> => N,
            <<"AttributeType">> => T } || {N, T} <- Attributes ] }.
 
+%% @doc Return a `KeySchema' map suitable for use in a
+%% table or index specification.
+%%
+%% If you pass one attribute, it will be assigned the `HASH'
+%% key type.  If you pass two attributes, the first will be
+%% `HASH' and the second will be the `RANGE' type.
+%%
+%% You can <a href="http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html">read more about hash and range keys</a>
+%% in the official Dynamo documentation.
+-spec make_key_schema(
+        [ HashKey :: binary() ] |
+        [ HashKey :: binary(), RangeKey :: binary() ] ) -> KeySchema :: map().
 make_key_schema([HashKey]) ->
     make_schema_impl([{HashKey, <<"HASH">>}]);
 make_key_schema([HashKey, RangeKey]) ->
@@ -50,17 +79,46 @@ make_schema_impl(Schema) ->
       [ #{ <<"AttributeName">> => N,
            <<"KeyType">> => T } || {N, T} <- Schema ] }.
 
+%% @doc Makes a `ProvisionedThroughput' map to indicate the number
+%% read and write units Dynamo should reserve for your index or
+%% table.
+-spec make_provisioned_throughput(
+        ReadUnits :: pos_integer(),
+        WriteUnits :: pos_integer() ) -> ProvisionedThroughput :: map().
 make_provisioned_throughput(ReadUnits, WriteUnits) ->
     #{ <<"ProvisionedThroughput">> =>
           #{ <<"ReadCapacityUnits">> => ReadUnits,
          <<"WriteCapacityUnits">> => WriteUnits } }.
 
+%% @doc Makes a `TableName' map suitable for use in a table
+%% or index specification.
+-spec table_name( Name :: binary() ) -> TableName :: map().
 table_name(N) when is_binary(N) -> #{ <<"TableName">> => N }.
 
+%% @doc Convenience function which returns a complete
+%% table specification.  This function uses the default
+%% number of read and write units (currently 5 each).
+-spec make_table_spec(
+        TableName :: binary(),
+        Attr :: [{ AttrName :: binary(),
+                   AttrType :: <<"N">> | <<"S">> | <<"B">> }],
+        Keys :: [ HashKey :: binary() ] |
+                [ HashKey :: binary(), RangeKey :: binary() ]
+       ) -> TableSpec :: map().
 make_table_spec(TableName, Attributes, Keys) ->
     make_table_spec(TableName, Attributes, Keys,
                     ?DEFAULT_READ_UNITS, ?DEFAULT_WRITE_UNITS).
 
+%% @doc Convenience function which returns a complete
+%% table specification.
+-spec make_table_spec(
+        TableName :: binary(),
+        Attr :: [{ AttrName :: binary(),
+                   AttrType :: <<"N">> | <<"S">> | <<"B">> }],
+        Keys :: [ HashKey :: binary() ] |
+                [ HashKey :: binary(), RangeKey :: binary() ],
+        ReadUnits :: pos_integer(),
+        WriteUnits :: pos_integer() ) -> TableSpec :: map().
 make_table_spec(TableName, Attributes, Keys, Read, Write) ->
     lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{},
                 [make_attribute_defs(Attributes),
@@ -68,10 +126,32 @@ make_table_spec(TableName, Attributes, Keys, Read, Write) ->
                  make_provisioned_throughput(Read, Write),
                  table_name(TableName)]).
 
+%% @doc Convenience function which returns a global index
+%% specification. This function uses the default read and
+%% write units (currently 5 each).
+-spec make_global_index_spec(
+        IndexName :: binary(),
+        Keys :: [ HashKey :: binary() ] |
+                [ HashKey :: binary(), RangeKey :: binary() ],
+        ProjectionSpec :: {} |
+            { [ binary() ], <<"INCLUDE">> | <<"ALL">> | <<"KEYS_ONLY">> }
+       ) -> GlobalIndexSpec :: map().
 make_global_index_spec(IndexName, Keys, ProjectionSpec) ->
     make_global_index_spec(IndexName, Keys, ProjectionSpec,
                            ?DEFAULT_READ_UNITS, ?DEFAULT_WRITE_UNITS).
 
+%% @doc Convenience function which returns a global index
+%% specification.
+-spec make_global_index_spec(
+        IndexName :: binary(),
+        Keys :: [ HashKey :: binary() ] |
+                [ HashKey :: binary(), RangeKey :: binary() ],
+        ProjectionSpec :: {} |
+            { [ NonKeyAttribute :: binary() ],
+              <<"INCLUDE">> | <<"ALL">> | <<"KEYS_ONLY">> },
+        ReadUnits :: pos_integer(),
+        WriteUnits :: pos_integer()
+       ) -> GlobalIndexSpec :: map().
 make_global_index_spec(IndexName, Keys, ProjectionSpec, Read, Write) ->
     lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{},
                 [make_key_schema(Keys),
@@ -79,13 +159,36 @@ make_global_index_spec(IndexName, Keys, ProjectionSpec, Read, Write) ->
                  make_projection(ProjectionSpec),
                  index_name(IndexName)]).
 
+%% @doc Add a global index specification to an existing table
+%% specification.  If a global index specification has already
+%% been added, this function will add the new one to the
+%% current one.
+%%
+%% Tables may not have more than two global indices.
+-spec add_global_index(
+        TableSpec :: map(),
+        GlobalIndexSpec :: map() ) -> NewTableSpec :: map().
 add_global_index(#{ <<"GlobalSecondaryIndexes">> := CurrentGSI } = TableSpec, GSISpec) ->
     maps:put(<<"GlobalSecondaryIndexes">>, [ GSISpec | CurrentGSI ], TableSpec);
 add_global_index(TableSpec, GSISpec) ->
     maps:put(<<"GlobalSecondaryIndexes">>, [ GSISpec ], TableSpec).
 
+%% @doc Create an `IndexName' map for use in an index specification.
+-spec index_name( Name :: binary() ) -> IndexName :: map().
 index_name(N) when is_binary(N) -> #{ <<"IndexName">> => N }.
 
+%% @doc This function returns a `Projection' map suitable for
+%% use in an index specification.  It is expected that if you
+%% want the `ALL' or `KEYS_ONLY' projection type, your list of
+%% non-key attributes will be empty.
+%%
+%% If you want an empty projection map, pass in an empty tuple
+%% `{}'.
+-spec make_projection(
+        ProjectionSpec :: {} |
+            { [ NonKeyAttribute :: binary() ],
+              <<"INCLUDE">> | <<"ALL">> | <<"KEYS_ONLY">> }
+       ) -> Projection :: map().
 make_projection({}) -> #{ <<"Projection">> => #{} };
 make_projection({Attr, <<"INCLUDE">>}) -> #{ <<"Projection">> => #{ <<"NonKeyAttributes">> => Attr,
                                                                     <<"ProjectionType">> => <<"INCLUDE">> } };
@@ -119,6 +222,11 @@ delete_table(Client, TableName) ->
 ensure_deleting_state( #{ <<"TableStatus">> := <<"DELETING">> }, _Details ) -> ok;
 ensure_deleting_state( Other , {Status, _Headers, _C} ) -> {error, {table_deletion_error, {Status, Other}}}.
 
+%% @doc This returns a map representing the current state of the
+%% given Dynamo table.
+-spec describe_table( Client :: darcy_client:aws_client(),
+                      TableName :: binary() ) -> {ok, TableDesc :: map()} |
+                                                 {error, Error :: term()}.
 describe_table(Client, TableName) ->
     case darcy_ddb_api:describe_table(Client, table_name(TableName)) of
          {ok, Result, _Details                  } -> {ok, Result};
@@ -126,6 +234,15 @@ describe_table(Client, TableName) ->
     end.
 
 %% GET ITEM
+
+%% @doc Retrieve a single item from the given Dynamo table using
+%% the hash and if needed, range keys.
+-spec get_item( Client :: darcy_client:aws_client(),
+                TableName :: binary(),
+                Key :: #{ KeyName :: binary() => LookupValue :: lookup_value() }
+              ) -> {ok, Item :: map()} |
+                   {error, not_found} |
+                   {error, Error :: term()}.
 get_item(Client, TableName, Key) ->
     Request = #{ <<"TableName">> => TableName,
                  <<"Key">> => to_ddb(Key) },
@@ -135,10 +252,16 @@ get_item(Client, TableName, Key) ->
           {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
     end.
 
+%% @TODO Implement this
 batch_get_items(Client, Request) ->
     darcy_ddb_api:batch_get_item(Client, Request).
 
 %% PUT ITEM
+
+%% @doc Put a single item into the given dynamo table.
+-spec put_item( Client :: darcy_client:aws_client(),
+                TableName :: binary(),
+                Item :: map() ) -> ok | {error, Error :: term()}.
 put_item(Client, TableName, Item) ->
     Request = #{ <<"TableName">> => TableName,
                  <<"Item">> => to_ddb(Item) },
@@ -147,6 +270,17 @@ put_item(Client, TableName, Item) ->
     {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
     end.
 
+%% @doc Put a list of items into the given Dynamo table.
+%%
+%% This function currently does not support deleting
+%% items (although the underlying API supports this.)
+%%
+%% Items are automatically batched into groups of 25 or
+%% less as required by AWS. Unprocessed keys are automatically
+%% retried up to 5 times.
+-spec batch_write_items( Client :: darcy_client:aws_client(),
+                         TableName :: binary(),
+                         Items :: [ map() ] ) -> ok | {error, Error :: term()}.
 batch_write_items(Client, TableName, Items) when length(Items) =< 25 ->
     Request = make_batch_put(TableName, Items),
     Result = darcy_ddb_api:batch_write_item(Client, Request),
@@ -182,14 +316,37 @@ reprocess_batch_write(Client, N, RetryItems) ->
     Results = darcy_ddb_api:batch_write_item(Client, #{ <<"RequestItems">> => RetryItems }),
     handle_batch_write_result(Client, N-1, Results).
 
-
-
 return_value(#{ <<"Item">> := Item }) -> {ok, clean_map(to_map(Item))};
 return_value(#{} = M) when map_size(M) == 0 -> {error, not_found}.
 
+%% QUERY
+
+%% @doc Lookup records using the partition and range keys from
+%% a table or an index.
+%%
+%% Unfortunately this call requires quite a bit of understanding
+%% of both the Dynamo data model and the table and/or index
+%% structures.
+%%
+%% The query expression should take the form of a map which follows
+%% the <a href="http://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html">query guidelines</a> laid out in the official AWS documentation.
+%%
+%% The return value also punts on the issue of result pagination.
+-spec query( Client :: darcy_client:aws_client(),
+             TableName :: binary(),
+             QueryExpression :: map() ) -> {ok, Results :: #{ <<"Count">> => Count :: non_neg_integer(),
+                                                              <<"Items">> => [ map() ] }} | 
+                                           {error, Error :: term()}.
 query(Client, TableName, Expr) ->
     query_impl(Client, [table_name(TableName), Expr]).
 
+%% @doc A query that operates on an index instead of a table.
+-spec query( Client :: darcy_client:aws_client(),
+             TableName :: binary(),
+             IndexName :: binary(),
+             QueryExpression :: map() ) -> {ok, Results :: #{ <<"Count">> => Count :: non_neg_integer(),
+                                                              <<"Items">> => [ map() ] }} | 
+                                           {error, Error :: term()}.
 query(Client, TableName, IndexName, Expr) ->
     query_impl(Client, [table_name(TableName), index_name(IndexName), Expr]).
 

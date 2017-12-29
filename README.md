@@ -17,6 +17,16 @@ This implementation rips the Dynamo and AWS implementation off from
 client used is [hackney][7].  At some future point, it may be
 desirable to make the JSON library and/or HTTP client configurable.
 
+At this point in time, you'll still have to know quite a bit about
+how Dynamo does what it does. Sorry.  This library was more about
+getting something working quickly than ironing out the finer nuances
+of library API design.
+
+That being said, I am definitely interested in making this library
+easier and more robust to use, so pull requests are definitely welcome. 
+I ask that before you send any giant pull requests, open an issue first to
+discuss the proposal.
+
 Use
 ---
 This library uses maps. Maps in, maps out. If you don't like maps or your
@@ -27,23 +37,23 @@ You'll want to install [local DynamoDB][5] to run this example (or indeed
 the unit test.)
 
     1> darcy:start().
-    2> Client = aws_client:local_client(<<"access">>, <<"secret">>, <<"12000">>).
+    2> Client = darcy_client:local_client(<<"access">>, <<"secret">>, <<"12000">>).
     3> Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }].
-    4> Keys = [<"Student">>, { <<"Subject">>],
+    4> Keys = [<<"Student">>, <<"Subject">>].
     5> TableSpec = darcy:make_table_spec(<<"Grades">>, Attributes, Keys).
     6> ok = darcy:make_table_if_not_exists(Client, TableSpec).
-    7> Grades = #{ <<"Student">> => <<"Alice">>, <<"Subject">> => <<"Math">>, <<"Grades">> => {list, [75, 80, 90]} }.
-    8> ok = darcy:put_item(Client, <<"Grades">>, Grades).
-    9> {ok, darcy:clean_map(Grades)} = darcy:get_item(Client, <<"Grades">>, #{ <<"Student">> => <<"Alice">>, <<"Subject">> => <<"Math">> }).
+    7> Grade = #{ <<"Student">> => <<"Alice">>, <<"Subject">> => <<"Math">>, <<"Grades">> => {list, [75, 80, 90], <<"Average">> => 81.66666666666667 } }.
+    8> ok = darcy:put_item(Client, <<"Grades">>, Grade).
+    9> {ok, Grade} = darcy:get_item(Client, <<"Grades">>, #{ <<"Student">> => <<"Alice">>, <<"Subject">> => <<"Math">> }).
 
 ### Dynamo Data Types and Erlang ###
 DynamoDB requires that data sent to it have its data types explicitly marked as
-part of serializing a request to the service. [Read more about that here][6]
+part of serializing a request to the service. [Read more about that here][6].
 
 In darcy, the functions `to_map` and `to_ddb` translate back and forth 
 between Erlang-y data structures and a Dynamo encoded data structure.
 
-Erlang has some abiguities in its data model when it's serialized to JSON.  In
+Erlang has some ambiguities in its data model when it's serialized to JSON.  In
 particular, it is difficult to distinguish between a list of elements, and a
 string.  It is also difficult to tell if a binary string should be treated as
 text or as a literal binary blob.  To address these ambiguities, darcy encodes
