@@ -38,8 +38,8 @@
 ]).
 
 -type lookup_value() :: integer() | float() | binary() | {blob, binary()}.
--type set_value() :: {number_set, [ integer() | float() ] } | {string_set, [ binary() ]}.
--type list_value() :: {list, [ map() | set_value() | lookup_value() ]}.
+%-type set_value() :: {number_set, [ integer() | float() ] } | {string_set, [ binary() ]}.
+%-type list_value() :: {list, [ map() | set_value() | lookup_value() ]}.
 
 %% @doc Convenience function to start `darcy' and all
 %% of its dependent applications.
@@ -50,7 +50,7 @@ start() ->
 %% suitable for using in a table or index specification.
 -spec make_attribute_defs(
         [ { AttributeName :: binary(),
-            AttributeType :: <<"N">> | <<"S">> | <<"B">> } ]
+            AttributeType :: binary() } ]
        ) -> AttributeDefinitions :: map().
 make_attribute_defs(Attributes) when is_list(Attributes) ->
     #{ <<"AttributeDefinitions">> =>
@@ -67,8 +67,7 @@ make_attribute_defs(Attributes) when is_list(Attributes) ->
 %% You can <a href="http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html">read more about hash and range keys</a>
 %% in the official Dynamo documentation.
 -spec make_key_schema(
-        [ HashKey :: binary() ] |
-        [ HashKey :: binary(), RangeKey :: binary() ] ) -> KeySchema :: map().
+        [ Keys :: binary() ] ) -> KeySchema :: map().
 make_key_schema([HashKey]) ->
     make_schema_impl([{HashKey, <<"HASH">>}]);
 make_key_schema([HashKey, RangeKey]) ->
@@ -101,10 +100,8 @@ table_name(N) when is_binary(N) -> #{ <<"TableName">> => N }.
 -spec make_table_spec(
         TableName :: binary(),
         Attr :: [{ AttrName :: binary(),
-                   AttrType :: <<"N">> | <<"S">> | <<"B">> }],
-        Keys :: [ HashKey :: binary() ] |
-                [ HashKey :: binary(), RangeKey :: binary() ]
-       ) -> TableSpec :: map().
+                   AttrType :: binary() }],
+        Keys :: [ Keys :: binary() ] ) -> TableSpec :: map().
 make_table_spec(TableName, Attributes, Keys) ->
     make_table_spec(TableName, Attributes, Keys,
                     ?DEFAULT_READ_UNITS, ?DEFAULT_WRITE_UNITS).
@@ -114,9 +111,8 @@ make_table_spec(TableName, Attributes, Keys) ->
 -spec make_table_spec(
         TableName :: binary(),
         Attr :: [{ AttrName :: binary(),
-                   AttrType :: <<"N">> | <<"S">> | <<"B">> }],
-        Keys :: [ HashKey :: binary() ] |
-                [ HashKey :: binary(), RangeKey :: binary() ],
+                   AttrType :: binary() }],
+        Keys :: [ binary() ],
         ReadUnits :: pos_integer(),
         WriteUnits :: pos_integer() ) -> TableSpec :: map().
 make_table_spec(TableName, Attributes, Keys, Read, Write) ->
@@ -131,10 +127,9 @@ make_table_spec(TableName, Attributes, Keys, Read, Write) ->
 %% write units (currently 5 each).
 -spec make_global_index_spec(
         IndexName :: binary(),
-        Keys :: [ HashKey :: binary() ] |
-                [ HashKey :: binary(), RangeKey :: binary() ],
+        Keys :: [ binary() ],
         ProjectionSpec :: {} |
-            { [ binary() ], <<"INCLUDE">> | <<"ALL">> | <<"KEYS_ONLY">> }
+            { [ binary() ], binary() }
        ) -> GlobalIndexSpec :: map().
 make_global_index_spec(IndexName, Keys, ProjectionSpec) ->
     make_global_index_spec(IndexName, Keys, ProjectionSpec,
@@ -144,11 +139,9 @@ make_global_index_spec(IndexName, Keys, ProjectionSpec) ->
 %% specification.
 -spec make_global_index_spec(
         IndexName :: binary(),
-        Keys :: [ HashKey :: binary() ] |
-                [ HashKey :: binary(), RangeKey :: binary() ],
+        Keys :: [ binary() ],
         ProjectionSpec :: {} |
-            { [ NonKeyAttribute :: binary() ],
-              <<"INCLUDE">> | <<"ALL">> | <<"KEYS_ONLY">> },
+            { [ NonKeyAttribute :: binary() ], binary() },
         ReadUnits :: pos_integer(),
         WriteUnits :: pos_integer()
        ) -> GlobalIndexSpec :: map().
@@ -186,9 +179,7 @@ index_name(N) when is_binary(N) -> #{ <<"IndexName">> => N }.
 %% `{}'.
 -spec make_projection(
         ProjectionSpec :: {} |
-            { [ NonKeyAttribute :: binary() ],
-              <<"INCLUDE">> | <<"ALL">> | <<"KEYS_ONLY">> }
-       ) -> Projection :: map().
+            { [ NonKeyAttribute :: binary() ], binary() }) -> Projection :: map().
 make_projection({}) -> #{ <<"Projection">> => #{} };
 make_projection({Attr, <<"INCLUDE">>}) -> #{ <<"Projection">> => #{ <<"NonKeyAttributes">> => Attr,
                                                                     <<"ProjectionType">> => <<"INCLUDE">> } };
@@ -334,8 +325,7 @@ return_value(#{} = M) when map_size(M) == 0 -> {error, not_found}.
 %% The return value also punts on the issue of result pagination.
 -spec query( Client :: darcy_client:aws_client(),
              TableName :: binary(),
-             QueryExpression :: map() ) -> {ok, Results :: #{ <<"Count">> => Count :: non_neg_integer(),
-                                                              <<"Items">> => [ map() ] }} | 
+             QueryExpression :: map() ) -> {ok, Results :: map() } |
                                            {error, Error :: term()}.
 query(Client, TableName, Expr) ->
     query_impl(Client, [table_name(TableName), Expr]).
@@ -344,8 +334,7 @@ query(Client, TableName, Expr) ->
 -spec query( Client :: darcy_client:aws_client(),
              TableName :: binary(),
              IndexName :: binary(),
-             QueryExpression :: map() ) -> {ok, Results :: #{ <<"Count">> => Count :: non_neg_integer(),
-                                                              <<"Items">> => [ map() ] }} | 
+             QueryExpression :: map() ) -> {ok, Results :: map() } |
                                            {error, Error :: term()}.
 query(Client, TableName, IndexName, Expr) ->
     query_impl(Client, [table_name(TableName), index_name(IndexName), Expr]).
