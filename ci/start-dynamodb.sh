@@ -12,4 +12,4 @@ java -Djava.library.path="$DYNAMODB_LOCAL_DIR/DynamoDBLocal_lib" \
      -jar "$DYNAMODB_LOCAL_DIR/DynamoDBLocal.jar" \
      -sharedDb \
      -inMemory \
-     -port 12000
+     -port 12000 &
