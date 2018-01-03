@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/mrallen1/darcy.svg?branch=master)](https://travis-ci.org/mrallen1/darcy)
+
 darcy
 =====
 Darcy aims to be an DynamoDB client for Erlang that doesn't suck too much.
