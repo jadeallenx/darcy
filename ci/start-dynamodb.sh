@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_PATH=`dirname $0`
 
-source "$SCRIPT_PATH/install-dynamodb.sh"
+source "$SCRIPT_PATH/dynamodb-install.sh"
 
 DYNAMODB_LOCAL_DIR="$SCRIPT_PATH/dynamodb_local"
 
