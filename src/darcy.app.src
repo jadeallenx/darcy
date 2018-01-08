@@ -1,6 +1,6 @@
 {application, darcy,
  [{description, "Erlang DDB client"},
-  {vsn, "0.0.1"},
+  {vsn, "0.0.2"},
   {registered, []},
   {applications,
    [kernel,
@@ -8,7 +8,8 @@
     crypto,
     ssl,
     hackney,
-    jsone
+    jsone,
+    erlware_commons
    ]},
   {env,[]},
   {modules, []},
