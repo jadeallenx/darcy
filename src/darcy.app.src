@@ -1,6 +1,6 @@
 {application, darcy,
  [{description, "Erlang DDB client"},
-  {vsn, "0.0.2"},
+  {vsn, "0.0.3"},
   {registered, []},
   {applications,
    [kernel,
