@@ -437,8 +437,8 @@ ddt({blob, Data}) ->
 ddt({list, L}) -> #{ <<"L">> => [ ddt(E) || E <- L ] };
 ddt({string_set, S}) -> #{ <<"SS">> => [ ddt(E) || E <- ?SET:to_list(S) ] };
 ddt({number_set, S}) -> #{ <<"NS">> => [ ddt(E) || E <- ?SET:to_list(S) ] };
-ddt(V) when is_integer(V) -> #{ <<"N">> => V };
-ddt(V) when is_float(V) -> #{ <<"N">> => V };
+ddt(V) when is_integer(V) -> #{ <<"N">> => number_to_binary(V) };
+ddt(V) when is_float(V) -> #{ <<"N">> => number_to_binary(V) };
 ddt(V) when is_binary(V) -> #{ <<"S">> => V };
 ddt(V) when is_boolean(V) -> #{ <<"BOOL">> => V };
 ddt(V) when is_map(V) -> #{ <<"M">> => maps:map(fun(_K, Val) -> ddt(Val) end, V) };
@@ -451,9 +451,24 @@ ddt(V) when is_list(V) ->
     end;
 ddt(Other) -> erlang:error({error, badarg}, [Other]).
 
+number_to_binary(V) when is_integer(V) -> integer_to_binary(V);
+number_to_binary(V) when is_float(V) -> float_to_binary(V, [{decimals, 20}, compact]).
+
 %% Tests
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+to_ddb_test() ->
+    Raw = #{ <<"Grades">> => {list, [17,39,76,27]},
+             <<"Average">> => 39.75,
+             <<"Student">> => <<"Quentin">>,
+             <<"Subject">> => <<"Science">> },
+    Expected = #{<<"Grades">> => #{<<"L">> => [#{<<"N">> => <<"17">>}, #{<<"N">> => <<"39">>}, #{<<"N">> => <<"76">>}, #{<<"N">> => <<"27">>}]},
+                 <<"Average">> => #{<<"N">> => <<"39.75">>},
+            <<"Student">> => #{<<"S">> => <<"Quentin">>},
+            <<"Subject">> => #{<<"S">> => <<"Science">>}},
+    ?assertEqual(Expected, to_ddb(Raw)).
+
 
 to_map_test() ->
     Raw = #{<<"Grades">> => #{<<"L">> => [#{<<"N">> => <<"17">>}, #{<<"N">> => <<"39">>}, #{<<"N">> => <<"76">>}, #{<<"N">> => <<"27">>}]},
