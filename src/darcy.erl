@@ -30,7 +30,7 @@
     describe_table/2,
     delete_table/2,
     get_item/3,
-    batch_get_items/2,
+    batch_get_items/3,
     put_item/3,
     batch_write_items/3,
     query/3,
@@ -243,9 +243,77 @@ get_item(Client, TableName, Key) ->
           {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
     end.
 
-%% @TODO Implement this
-batch_get_items(Client, Request) ->
-    darcy_ddb_api:batch_get_item(Client, Request).
+%% @doc Retrieve a set of records given a list of keys.
+%%
+%% The underlying API supports a maximum of 100 keys per
+%% request, so this call batches keys into sets of up
+%% to 100 and folds across these sets into an
+%% accumulator for all keys.
+%%
+%% Items which are not found in the table will not be part
+%% of the result set but will consume provisioned read
+%% capacity.
+%%
+%% <B>N.B.</B>: Dynamo and this client will not return your items
+%% in any particular order!
+-spec batch_get_items(    Client :: darcy_client:aws_client(),
+                       TableName :: binary(),
+                           Items :: [ map() ] ) -> {ok, [ Result :: term() ]} |
+                                                   {error, Error :: term() }.
+batch_get_items(Client, TableName, Keys) ->
+    make_batch_get(Client, TableName, Keys, []).
+
+make_batch_get(_Client, _TableName, [], Acc) -> {ok, lists:flatten(Acc)};
+make_batch_get(Client, TableName, Keys, Acc) ->
+    {Request, Rest} = format_batch_get(TableName, Keys),
+    Result = execute_batch_get(Client, TableName, Request, ?RETRIES, []),
+    make_batch_get(Client, TableName, Rest, [ Result | Acc ]).
+
+format_batch_get(TableName, Keys) ->
+    {Current, Rest} = maybe_split_keys(Keys),
+    {format_batch_get_request(TableName, Current), Rest}.
+
+maybe_split_keys(Keys) when length(Keys) =< 100 -> {Keys, []};
+maybe_split_keys(Keys) -> lists:split(100, Keys).
+
+format_batch_get_request(TableName, Keys) ->
+    #{ <<"RequestItems">> =>
+       #{ TableName =>
+          #{ <<"Keys">> => [ to_ddb(K) || K <- Keys ] }
+        }
+     }.
+
+execute_batch_get(_Client, _TableName, Request, 0, Acc) -> {error, {retries_exceeded, Request, Acc}};
+execute_batch_get(Client, TableName, Request, Retries, Acc) ->
+    case darcy_ddb_api:batch_get_item(Client, Request) of
+        {ok, Raw, _Details} -> return_batch_get_results(Raw, Client, TableName, Retries, Acc);
+        {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
+    end.
+
+%% happy path: no unprocessed keys, no accumulator
+return_batch_get_results(#{ <<"Responses">> := R,
+                            <<"UnprocessedKeys">> := U }, _Client, TableName,
+                                                          _Retries, [])
+                                                   when map_size(U) == 0 ->
+    batch_get_results(TableName, R);
+
+%% not as happy path: no unprocessed keys, accumulator has partial results
+return_batch_get_results(#{ <<"Responses">> := R,
+                            <<"UnprocessedKeys">> := U }, _Client, TableName,
+                                                          _Retries, Acc)
+                                                   when map_size(U) == 0 ->
+    lists:flatten([ batch_get_results(TableName, R) | Acc ]);
+
+%% not very happy path: unprocessed keys
+return_batch_get_results(#{ <<"Responses">> := R,
+                            <<"UnprocessedKeys">> := U }, Client, TableName,
+                                                          Retries, Acc) ->
+    retry_sleep(Retries),
+    execute_batch_get(Client, TableName, U,
+                      Retries - 1, [ batch_get_results(TableName, R) | Acc ]).
+
+batch_get_results(TableName, Responses) ->
+    [ clean_map(to_map(I)) || I <- maps:get(TableName, Responses) ].
 
 %% PUT ITEM
 
@@ -304,6 +372,7 @@ handle_batch_write_result(_Client, _N,
 
 reprocess_batch_write(_Client, 0, RetryItems) -> {error, {retries_exceeded, RetryItems}};
 reprocess_batch_write(Client, N, RetryItems) ->
+    retry_sleep(N),
     Results = darcy_ddb_api:batch_write_item(Client, #{ <<"RequestItems">> => RetryItems }),
     handle_batch_write_result(Client, N-1, Results).
 
@@ -453,6 +522,18 @@ ddt(Other) -> erlang:error({error, badarg}, [Other]).
 
 number_to_binary(V) when is_integer(V) -> integer_to_binary(V);
 number_to_binary(V) when is_float(V) -> float_to_binary(V, [{decimals, 20}, compact]).
+
+%% sleep for RETRIES - N * 1000 milliseconds before retrying an operation.
+%% Current RETRIES value is 5. Always sleeps for <i>at least</i> 1000
+%% milliseconds.
+%% N = 5 => 1000 ms sleep
+%% N = 4 => 1000 ms sleep
+%% N = 3 => 2000 ms sleep
+%% N = 2 => 3000 ms sleep
+%% N = 1 => 4000 ms sleep
+retry_sleep(N) ->
+    S = max(1000, (?RETRIES-N) * 1000),
+    timer:sleep(S).
 
 %% Tests
 -ifdef(TEST).

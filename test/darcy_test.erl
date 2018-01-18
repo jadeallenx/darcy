@@ -83,7 +83,7 @@ batch_test() ->
     {ok, Desc} = darcy:describe_table(Client, TableId),
     ?assert(same_count(length(Records), Desc)),
 
-    Lookups = [ lookup_item(Records) || _ <- lists:seq(1, 20) ],
+    Lookups = ordsets:from_list([ lookup_item(Records) || _ <- lists:seq(1, 20) ]),
     Result1 = lists:map(fun({N, S}) ->
                                 darcy:get_item(Client,
                                            TableId,
@@ -95,6 +95,10 @@ batch_test() ->
                               (_)  -> false
                       end,
                       Result1)),
+
+    LookupKeys = [ #{ <<"Student">> => N, <<"Subject">> => S } || {N, S} <- ordsets:to_list(Lookups) ],
+    {ok, Results} = darcy:batch_get_items(Client, TableId, LookupKeys),
+    ?assert(length(Results) == length(ordsets:to_list(Lookups))),
 
     {Cond, Expected} = make_random_query(Records),
     {ok, #{ <<"Count">> := C, <<"Items">> := I } } = darcy:query(Client, TableId, Cond),
