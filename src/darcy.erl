@@ -10,6 +10,8 @@
 -module(darcy).
 -include("darcy.hrl").
 
+-define(TIMEOUT, 5000).
+
 -export([
     start/0,
     to_map/1,
@@ -27,6 +29,7 @@
     make_global_index_spec/5,
     add_global_index/2,
     make_table_if_not_exists/2,
+    make_global_table_if_not_exists/3,
     describe_table/2,
     delete_table/2,
     get_item/3,
@@ -187,7 +190,7 @@ make_projection({[], T}) -> #{ <<"Projection">> => #{ <<"ProjectionType">> => T 
 
 %% @doc Make a table if it doesn't already exist.
 -spec make_table_if_not_exists( Client :: darcy_client:aws_client(),
-                                TableName :: binary() ) -> ok | {error, Error :: term()}.
+                                TableSpec :: map() ) -> ok | {error, Error :: term()}.
 make_table_if_not_exists(Client, #{ <<"TableName">> := TableName} = Spec) ->
     case darcy_ddb_api:describe_table(Client, #{ <<"TableName">> => TableName }) of
            {ok, _Result, _Details} -> ok;
@@ -199,6 +202,53 @@ attempt_make_table(Client, Spec) ->
     case darcy_ddb_api:create_table(Client, Spec) of
            {ok, _Result, {   200, _Headers, _Client}} -> ok;
         {error, Error,   {Status, _Headers, _NewClient}} -> {error, {table_creation_failed, {Status, Error}}}
+    end.
+
+%% @doc Make a global table if it doesn't already exist.
+-spec make_global_table_if_not_exists(Client :: darcy_client:aws_client(),
+                                      TableSpec :: map(),
+                                      Regions :: [ binary() ]) -> ok | {error, Error :: term()}.
+make_global_table_if_not_exists(#{ region := Region } = Client,
+                                #{ <<"TableName">> := TableName } = Spec, Regions) ->
+    case lists:member(Region, Regions) of
+        false -> {error, {bad_region_spec, [Region, Regions]}};
+        true ->
+            ok = global_table_setup(Client, Spec, Regions),
+            attempt_make_global_table(Client, TableName, Regions)
+    end.
+
+global_table_setup(Client, Spec, Regions) ->
+    Reply = self(),
+    _ = [ spawn_link(fun() -> do_table_creation(Client, Spec, Reply, R) end) || R <- Regions ],
+    wait_for_completion(length(Regions), 0).
+
+do_table_creation(Client, Spec, Reply, R) ->
+    NewClient = darcy_client:switch_region(Client, R),
+    NewSpec = enable_global_streams(Spec),
+    ok = attempt_make_table(NewClient, NewSpec),
+    Reply ! {R, done},
+    ok.
+
+enable_global_streams(Spec) ->
+    Streams = #{ <<"StreamSpecification">> =>
+                 #{ <<"StreamEnabled">> => true,
+                    <<"StreamViewType">> => <<"NEW_AND_OLD_IMAGES">> } },
+    maps:merge(Spec, Streams).
+
+wait_for_completion(N, N) -> ok;
+wait_for_completion(N, C) ->
+    receive
+        {_Region, done} -> wait_for_completion(N, C + 1)
+    after ?TIMEOUT ->
+        {error, table_creation_timeout}
+    end.
+
+attempt_make_global_table(Client, TableName, Regions) ->
+    Req = #{ <<"GlobalTableName">> => TableName,
+             <<"ReplicationGroup">> => [ #{ <<"RegionName">> => R } || R <- Regions ] },
+    case darcy_ddb_api:create_global_table(Client, Req) of
+        {ok, _Result, {200, _Headers, _Client}} -> ok;
+        {error, Error, {Status, _Headers, _Client}} -> {error, {global_table_creation_failed, {Status, Error}}}
     end.
 
 %% @doc Delete a Dynamo table with the given name.

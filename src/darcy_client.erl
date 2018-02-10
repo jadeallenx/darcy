@@ -1,6 +1,7 @@
 -module(darcy_client).
 
 -export([make_client/3, make_temporary_client/4,
+         switch_region/2,
 	 make_local_client/3]).
 
 -type access_key_id() :: binary().
@@ -15,6 +16,12 @@
 %%====================================================================
 %% API
 %%====================================================================
+
+-spec switch_region(aws_client(), binary()) -> aws_client().
+%% @doc This function switches a region setting to a new region setting.
+%% This is useful for creating global tables.
+switch_region(Client, NewRegion) when is_binary(NewRegion) ->
+    maps:put(region, NewRegion, Client).
 
 -spec make_client(access_key_id(), secret_access_key(), region()) ->
     aws_client().
