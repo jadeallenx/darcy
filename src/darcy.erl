@@ -238,7 +238,11 @@ enable_global_streams(Spec) ->
 wait_for_completion(N, N) -> ok;
 wait_for_completion(N, C) ->
     receive
-        {_Region, done} -> wait_for_completion(N, C + 1)
+        {_Region, done} -> wait_for_completion(N, C + 1);
+        Other ->
+            %% accept any message to avoid deadlock
+            error_logger:warning_msg("Unexpected message while waiting for global table setup: ~p", [Other]),
+            wait_for_completion(N, C)
     after ?TIMEOUT ->
         {error, table_creation_timeout}
     end.
