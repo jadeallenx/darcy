@@ -10,8 +10,10 @@
 -module(darcy).
 -include("darcy.hrl").
 
--define(TIMEOUT, 5000).
--define(BIG_TIMEOUT, 60000).
+-define(TIMEOUT, 5000). % 5 seconds
+-define(BIG_TIMEOUT, 5*60*1000). % 5 minutes
+-define(BATCH_SIZE, 100). % how many items to split into a batch
+-define(BATCH_MAX, 10). % maximum number of batches to process in a single go
 
 -export([
     start/0,
@@ -32,6 +34,7 @@
     make_table_if_not_exists/2,
     make_global_table_if_not_exists/3,
     describe_table/2,
+    describe_global_table/2,
     delete_table/2,
     get_item/3,
     batch_get_items/3,
@@ -220,39 +223,33 @@ make_global_table_if_not_exists(#{ region := Region } = Client,
     case lists:member(Region, Regions) of
         false -> {error, {bad_region_spec, [Region, Regions]}};
         true ->
-            ok = global_table_setup(Client, Spec, Regions),
-            attempt_make_global_table(Client, TableName, Regions)
+            case describe_global_table(Client, TableName) of
+                {ok, _Result} -> ok;
+                {error, _} ->
+                    ok = global_table_setup(Client, Spec, Regions),
+                    attempt_make_global_table(Client, TableName, Regions)
+            end
     end.
 
-global_table_setup(Client, Spec, Regions) ->
-    Reply = self(),
-    _ = [ spawn_link(fun() -> do_table_creation(Client, Spec, Reply, R) end) || R <- Regions ],
-    wait_for_completion(length(Regions), 0).
+all_ok(ok) -> true;
+all_ok(_) -> false.
 
-do_table_creation(Client, Spec, Reply, R) ->
-    NewClient = darcy_client:switch_region(Client, R),
-    NewSpec = enable_global_streams(Spec),
-    ok = attempt_make_table(NewClient, NewSpec),
-    Reply ! {R, done},
+global_table_setup(Client, Spec, Regions) ->
+    true = lists:all(fun all_ok/1,
+              pmap(fun(R) -> do_table_creation(Client, Spec, R) end, Regions)
+                    ),
     ok.
+
+do_table_creation(Client, Spec, Region) ->
+    NewClient = darcy_client:switch_region(Client, Region),
+    NewSpec = enable_global_streams(Spec),
+    make_table_if_not_exists(NewClient, NewSpec).
 
 enable_global_streams(Spec) ->
     Streams = #{ <<"StreamSpecification">> =>
                  #{ <<"StreamEnabled">> => true,
                     <<"StreamViewType">> => <<"NEW_AND_OLD_IMAGES">> } },
     maps:merge(Spec, Streams).
-
-wait_for_completion(N, N) -> ok;
-wait_for_completion(N, C) ->
-    receive
-        {_Region, done} -> wait_for_completion(N, C + 1);
-        Other ->
-            %% accept any message to avoid deadlock
-            error_logger:warning_msg("Unexpected message while waiting for global table setup: ~p", [Other]),
-            wait_for_completion(N, C)
-    after ?TIMEOUT ->
-        {error, table_creation_timeout}
-    end.
 
 attempt_make_global_table(Client, TableName, Regions) ->
     Req = #{ <<"GlobalTableName">> => TableName,
@@ -281,6 +278,17 @@ ensure_deleting_state( Other , {Status, _Headers, _C} ) -> {error, {table_deleti
                                                  {error, Error :: term()}.
 describe_table(Client, TableName) ->
     case darcy_ddb_api:describe_table(Client, table_name(TableName)) of
+         {ok, Result, _Details                  } -> {ok, Result};
+      {error,  Error, {Status, _Headers, Client}} -> {error, {table_description_error, {Status, Error}}}
+    end.
+
+%% @doc This returns a map representing the current state of the
+%% given Dynamo global table.
+-spec describe_global_table( Client :: darcy_client:aws_client(),
+                             TableName :: binary() ) -> {ok, TableDesc :: map()} |
+                                                        {error, Error :: term()}.
+describe_global_table(Client, TableName) ->
+    case darcy_ddb_api:describe_global_table(Client, table_name(TableName)) of
          {ok, Result, _Details                  } -> {ok, Result};
       {error,  Error, {Status, _Headers, Client}} -> {error, {table_description_error, {Status, Error}}}
     end.
@@ -486,7 +494,7 @@ process_result_set(Other) ->
 
 %% @doc This function executes a sequential table scan (no parallelism here)
 %% and returns results synchronously to the caller. If you want to scan a table
-%% with parallel workers, look at `scan/5'.
+%% with parallel workers, look at `scan_parallel'.
 %%
 %%
 %% Scans return automatically when 1 MB of data has accumulated. If more data
@@ -519,7 +527,7 @@ scan(Client, TableName, Expr) ->
 %% is returned from Dynamo.
 %%
 %% The items will be accumulated into a list and returned.  This call is
-%% syntactic sugar for `scan/4' with a function of `same(X) -> X' passed
+%% syntactic sugar for `scan_all/4' with a function of `same(X) -> X' passed
 %% in.
 scan_all(Client, TableName, Expr) ->
     scan_all(Client, TableName, Expr, fun same/1).
@@ -544,18 +552,18 @@ scan_all(Client, TableName, Expr, Fun) ->
     do_scan_all(Client, Request, execute_scan(Client, Request), Fun, []).
 
 do_scan_all(_Client, _Req, {ok, empty_table}, _Fun, _Acc) -> {ok, []};
-do_scan_all(_Client, _Req, {ok, no_results}, _Fun, Acc) -> {ok, lists:reverse(lists:flatten(Acc))};
+do_scan_all(_Client, _Req, {ok, no_results}, _Fun, Acc) -> {ok, flatten(Acc)};
 do_scan_all(_Client, _Req, {ok, #{ <<"Items">> := I }}, Fun, Acc) ->
-    {ok, lists:reverse(lists:flatten([ lists:map(Fun, I) | Acc ]))};
+    {ok, flatten([ batch_pmap(Fun, I) | Acc ])};
 do_scan_all(_Client, Req, {error, Error}, _Fun, Acc) ->
     error_logger:error_msg("Error executing scan_all. request: ~p, error: ~p", [Req, Error]),
     {error, {Error, Acc}};
 do_scan_all(Client, Req, {partial, #{ <<"LastEvaluatedKey">> := LEK, <<"Items">> := I }}, Fun, Acc) ->
     NewRequest = make_scan_request([Req, #{ <<"ExclusiveStartKey">> => LEK }]),
-    do_scan_all(Client, NewRequest, execute_scan(Client, NewRequest), Fun, [ lists:map(Fun, I) | Acc]).
+    do_scan_all(Client, NewRequest, execute_scan(Client, NewRequest), Fun, [ batch_pmap(Fun, I) | Acc]).
 
 %% @doc Scan a table in parallel using the given expression. This
-%% function is equivalent to `scan/7' with a timeout value of 60000
+%% function is equivalent to `scan_parallel/7' with a timeout value of 60000
 %% milliseconds.
 %%
 %% Instead of returning the coordinator pid to the caller, this
@@ -608,31 +616,17 @@ scan_parallel(Client, TableName, Expr, Fun, _Timeout, SegmentCount, ReplyPid) ->
 
     spawn_link(fun() -> start_coordinator(Client, Fun, Reqs, ReplyPid) end).
 
+results_ok({ok, _}) -> true;
+results_ok(_) -> false.
+
 start_coordinator(Client, Fun, Reqs, Reply) ->
-    Pids = [ spawn_link(fun() -> worker_scan_all(Client, R, Fun, self()) end) || R <- Reqs ],
-    coordinator_loop(Pids, Reply, [], []).
+    L = pmap(fun(Req) -> worker_scan_all(Client, Req, Fun) end, Reqs,
+                   ?BIG_TIMEOUT, scan_timeout),
+    {Res, Err} = lists:partition(fun results_ok/1, L),
+    Reply ! { lists:flatten([ R || {ok, R} <- Res ]), Err }.
 
-worker_scan_all(Client, Request, Fun, Coordinator) ->
-     Results = do_scan_all(Client, Request, execute_scan(Client, Request), Fun, []),
-     Coordinator ! {self(), Results}.
-
-coordinator_loop([], Reply, Acc, Errors) -> Reply ! {lists:reverse(lists:flatten(Acc)), lists:reverse(Errors)};
-coordinator_loop(Pids, Reply, Acc, Errors) ->
-    receive
-        {Pid, {ok, Result}} ->
-            coordinator_loop( Pids -- [Pid], Reply, [ Result | Acc ], Errors);
-        {Pid, {error, Error, Partial}} ->
-            coordinator_loop( Pids -- [Pid], Reply, [ Partial | Acc ], [ Error | Errors ]);
-        Other ->
-            %% fall through for rando messages
-            error_logger:warning_msg("Received unexpected message: ~p", [Other]),
-            coordinator_loop(Pids, Reply, Acc, Errors)
-    after ?BIG_TIMEOUT * 5 ->
-        error_logger:info_msg("The scan has timed out."
-                              "Worker pids: ~p, reply pid: ~p, accumulator: ~p, errors: ~p",
-                              [Pids, Reply, Acc, Errors]),
-        Reply ! scan_timeout
-    end.
+worker_scan_all(Client, Request, Fun) ->
+     do_scan_all(Client, Request, execute_scan(Client, Request), Fun, []).
 
 make_segments(N, Count) ->
     #{ <<"Segment">> => N,
@@ -660,6 +654,8 @@ process_scan_result(#{ <<"Items">> := Items } = M) ->
 process_scan_result(Other) ->
     {error, {scan_error, Other}}.
 
+
+flatten(L) when is_list(L) -> lists:flatten(lists:reverse(L)).
 
 %% @doc This function returns a map without any Dynamo specific type tuples,
 %% which is useful for passing around internally in an application that doesn't
@@ -774,6 +770,53 @@ number_to_binary(V) when is_float(V) -> float_to_binary(V, [{decimals, 20}, comp
 retry_sleep(N) ->
     S = max(1000, (?RETRIES-N) * 1000),
     timer:sleep(S).
+
+%% split the big list into smaller batches and execute them in parallel.
+batch_pmap(F, List) when length(List) =< ?BATCH_SIZE -> pmap(F, List);
+batch_pmap(F, BigList) ->
+    Len = length(BigList),
+    I = items_per_batch(Len),
+    PC = lists:seq(1, Len, I),
+    Batches = make_batches(BigList, I, PC, []),
+    pmap(fun(E) -> lists:map(F, E) end, Batches).
+
+items_per_batch(Len) ->
+    case Len div ?BATCH_SIZE of
+        I when I =< ?BATCH_MAX -> ?BATCH_SIZE;
+        _ -> Len div ?BATCH_MAX
+    end.
+
+make_batches(_, _, [], Acc) -> lists:reverse(Acc);
+make_batches(L, Len, [H|T], Acc) ->
+    make_batches(L, Len, T, [ lists:sublist(L, H, Len) | Acc ]).
+
+%% parallel map
+%% http://erlang.org/pipermail/erlang-questions/2009-January/041214.html
+%%
+%% TODO: Maybe we do not care about the order messages are received
+pmap(F, Arglist) ->
+    pmap(F, Arglist, ?TIMEOUT, pmap_timeout).
+
+pmap(F, Arglist, Timeout, TimeoutError) ->
+    S = self(),
+    TaskID = make_ref(),
+    Workers = lists:map( fun(X) ->
+                                 spawn_link(fun() -> do_F(S, TaskID, F, X) end)
+                         end, Arglist),
+    gather(Workers, TaskID, Timeout, TimeoutError).
+
+do_F(Caller, TaskID, F, X) ->
+    Caller ! {self(), TaskID, catch(F(X))}.
+
+gather([], _, _, _) -> [];
+gather([W|R], TaskID, Timeout, TimeoutError) ->
+    receive
+        {W, TaskID, Val} ->
+            [Val | gather(R, TaskID, Timeout, TimeoutError)]
+    after Timeout ->
+        TimeoutError
+    end.
+
 
 %% Tests
 -ifdef(TEST).
