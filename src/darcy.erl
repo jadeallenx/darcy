@@ -10,6 +10,11 @@
 -module(darcy).
 -include("darcy.hrl").
 
+-define(TIMEOUT, 5000). % 5 seconds
+-define(BIG_TIMEOUT, 5*60*1000). % 5 minutes
+-define(BATCH_SIZE, 100). % how many items to split into a batch
+-define(BATCH_MAX, 10). % maximum number of batches to process in a single go
+
 -export([
     start/0,
     to_map/1,
@@ -27,14 +32,22 @@
     make_global_index_spec/5,
     add_global_index/2,
     make_table_if_not_exists/2,
+    make_global_table_if_not_exists/3,
     describe_table/2,
+    describe_global_table/2,
     delete_table/2,
     get_item/3,
     batch_get_items/3,
     put_item/3,
     batch_write_items/3,
     query/3,
-    query/4
+    query/4,
+    scan/3,
+    scan_all/3,
+    scan_all/4,
+    scan_parallel/5,
+    scan_parallel/6,
+    scan_parallel/7
 ]).
 
 -type lookup_value() :: integer() | float() | binary() | {blob, binary()}.
@@ -187,7 +200,7 @@ make_projection({[], T}) -> #{ <<"Projection">> => #{ <<"ProjectionType">> => T 
 
 %% @doc Make a table if it doesn't already exist.
 -spec make_table_if_not_exists( Client :: darcy_client:aws_client(),
-                                TableName :: binary() ) -> ok | {error, Error :: term()}.
+                                TableSpec :: map() ) -> ok | {error, Error :: term()}.
 make_table_if_not_exists(Client, #{ <<"TableName">> := TableName} = Spec) ->
     case darcy_ddb_api:describe_table(Client, #{ <<"TableName">> => TableName }) of
            {ok, _Result, _Details} -> ok;
@@ -199,6 +212,51 @@ attempt_make_table(Client, Spec) ->
     case darcy_ddb_api:create_table(Client, Spec) of
            {ok, _Result, {   200, _Headers, _Client}} -> ok;
         {error, Error,   {Status, _Headers, _NewClient}} -> {error, {table_creation_failed, {Status, Error}}}
+    end.
+
+%% @doc Make a global table if it doesn't already exist.
+-spec make_global_table_if_not_exists(Client :: darcy_client:aws_client(),
+                                      TableSpec :: map(),
+                                      Regions :: [ binary() ]) -> ok | {error, Error :: term()}.
+make_global_table_if_not_exists(#{ region := Region } = Client,
+                                #{ <<"TableName">> := TableName } = Spec, Regions) ->
+    case lists:member(Region, Regions) of
+        false -> {error, {bad_region_spec, [Region, Regions]}};
+        true ->
+            case describe_global_table(Client, TableName) of
+                {ok, _Result} -> ok;
+                {error, _} ->
+                    ok = global_table_setup(Client, Spec, Regions),
+                    attempt_make_global_table(Client, TableName, Regions)
+            end
+    end.
+
+all_ok(ok) -> true;
+all_ok(_) -> false.
+
+global_table_setup(Client, Spec, Regions) ->
+    true = lists:all(fun all_ok/1,
+              pmap(fun(R) -> do_table_creation(Client, Spec, R) end, Regions)
+                    ),
+    ok.
+
+do_table_creation(Client, Spec, Region) ->
+    NewClient = darcy_client:switch_region(Client, Region),
+    NewSpec = enable_global_streams(Spec),
+    make_table_if_not_exists(NewClient, NewSpec).
+
+enable_global_streams(Spec) ->
+    Streams = #{ <<"StreamSpecification">> =>
+                 #{ <<"StreamEnabled">> => true,
+                    <<"StreamViewType">> => <<"NEW_AND_OLD_IMAGES">> } },
+    maps:merge(Spec, Streams).
+
+attempt_make_global_table(Client, TableName, Regions) ->
+    Req = #{ <<"GlobalTableName">> => TableName,
+             <<"ReplicationGroup">> => [ #{ <<"RegionName">> => R } || R <- Regions ] },
+    case darcy_ddb_api:create_global_table(Client, Req) of
+        {ok, _Result, {200, _Headers, _Client}} -> ok;
+        {error, Error, {Status, _Headers, _Client}} -> {error, {global_table_creation_failed, {Status, Error}}}
     end.
 
 %% @doc Delete a Dynamo table with the given name.
@@ -220,6 +278,17 @@ ensure_deleting_state( Other , {Status, _Headers, _C} ) -> {error, {table_deleti
                                                  {error, Error :: term()}.
 describe_table(Client, TableName) ->
     case darcy_ddb_api:describe_table(Client, table_name(TableName)) of
+         {ok, Result, _Details                  } -> {ok, Result};
+      {error,  Error, {Status, _Headers, Client}} -> {error, {table_description_error, {Status, Error}}}
+    end.
+
+%% @doc This returns a map representing the current state of the
+%% given Dynamo global table.
+-spec describe_global_table( Client :: darcy_client:aws_client(),
+                             TableName :: binary() ) -> {ok, TableDesc :: map()} |
+                                                        {error, Error :: term()}.
+describe_global_table(Client, TableName) ->
+    case darcy_ddb_api:describe_global_table(Client, table_name(TableName)) of
          {ok, Result, _Details                  } -> {ok, Result};
       {error,  Error, {Status, _Headers, Client}} -> {error, {table_description_error, {Status, Error}}}
     end.
@@ -421,6 +490,173 @@ process_result_set(#{ <<"Items">> := Items, <<"Count">> := C }) ->
 process_result_set(Other) ->
     {error, {query_error, Other}}.
 
+%% SCAN
+
+%% @doc This function executes a sequential table scan (no parallelism here)
+%% and returns results synchronously to the caller. If you want to scan a table
+%% with parallel workers, look at `scan_parallel'.
+%%
+%%
+%% Scans return automatically when 1 MB of data has accumulated. If more data
+%% is available, the atom `partial' will be returned instead of `ok'.
+%%
+%% If you want to continue your scanning activities, you must add the
+%% `LastEvaluatedKey' as the `ExclusiveStartKey' in the next call to
+%% this function's expression map. (See the official API docs for
+%% further details about continuing scans:
+%%
+%% https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Scan.html#API_Scan_ResponseSyntax.)
+%%
+%% If a table has no data, the atom `empty_table' will be returned.
+%%
+%% If a table has data, but a filter expression has filtered all results,
+%% the atom `no_results' will be returned.
+-spec scan( Client :: darcy_request:aws_client(),
+            TableName :: binary(),
+            Expr :: map() ) -> {ok, Result :: map()} |
+                               {ok, empty_table} |
+                               {ok, no_results} |
+                               {partial, Result :: map()} |
+                               {error, Reason :: term()}.
+scan(Client, TableName, Expr) ->
+    execute_scan(Client, make_scan_request([Expr, table_name(TableName)])).
+
+
+%% @doc This function executes a sequential scan over an entire table. In other
+%% words, it will continue to make new calls until no `LastEvaluatedKey' field
+%% is returned from Dynamo.
+%%
+%% The items will be accumulated into a list and returned.  This call is
+%% syntactic sugar for `scan_all/4' with a function of `same(X) -> X' passed
+%% in.
+scan_all(Client, TableName, Expr) ->
+    scan_all(Client, TableName, Expr, fun same/1).
+
+same(X) -> X.
+
+%% @doc This function executes a sequential scan over an entire table. In other
+%% words, it will continue to make new calls until no `LastEvaluatedKey' field
+%% is returned from Dynamo.
+%%
+%% For each item returned, the function `Fun' will be executed and the results
+%% accumulated and returned when all valid rows from the scan query expression
+%% have been processed. (You may or may not care about these results if you're
+%% doing something in your function for the side effect.)
+-spec scan_all( Client :: darcy_request:aws_client(),
+             TableName :: binary(),
+                  Expr :: map(),
+                  Fun  :: function() ) -> {ok, [ term() ]} |
+                                          {error, { Reason :: term(), Acc :: [ map() ]}}.
+scan_all(Client, TableName, Expr, Fun) ->
+    Request = make_scan_request([Expr, table_name(TableName)]),
+    do_scan_all(Client, Request, execute_scan(Client, Request), Fun, []).
+
+do_scan_all(_Client, _Req, {ok, empty_table}, _Fun, _Acc) -> {ok, []};
+do_scan_all(_Client, _Req, {ok, no_results}, _Fun, Acc) -> {ok, flatten(Acc)};
+do_scan_all(_Client, _Req, {ok, #{ <<"Items">> := I }}, Fun, Acc) ->
+    {ok, flatten([ batch_pmap(Fun, I) | Acc ])};
+do_scan_all(_Client, Req, {error, Error}, _Fun, Acc) ->
+    error_logger:error_msg("Error executing scan_all. request: ~p, error: ~p", [Req, Error]),
+    {error, {Error, Acc}};
+do_scan_all(Client, Req, {partial, #{ <<"LastEvaluatedKey">> := LEK, <<"Items">> := I }}, Fun, Acc) ->
+    NewRequest = make_scan_request([Req, #{ <<"ExclusiveStartKey">> => LEK }]),
+    do_scan_all(Client, NewRequest, execute_scan(Client, NewRequest), Fun, [ batch_pmap(Fun, I) | Acc]).
+
+%% @doc Scan a table in parallel using the given expression. This
+%% function is equivalent to `scan_parallel/7' with a timeout value of 60000
+%% milliseconds.
+%%
+%% Instead of returning the coordinator pid to the caller, this
+%% function blocks and waits for the return values from the
+%% coordinator.
+scan_parallel(Client, TableName, Expr, Fun, SegmentCount) ->
+    scan_parallel(Client, TableName, Expr, Fun, ?BIG_TIMEOUT, SegmentCount).
+
+scan_parallel(Client, TableName, Expr, Fun, Timeout, SegmentCount) ->
+    _ = scan_parallel(Client, TableName, Expr, Fun, Timeout, SegmentCount, self()),
+
+    receive
+        {Results, []} -> {ok, Results};
+        {Partial, Errors} -> {error, {Errors, Partial}};
+        Other -> Other
+    after Timeout ->
+        {error, scan_timeout}
+    end.
+
+%% @doc Scan a table in parallel using the given expression.
+%%
+%% DynamoDB supports parallel scans using a partitioning technique described in the Developer Guide.
+%%
+%% https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html
+%%
+%% This function spawns a coordinator process which in turn spawns a set of
+%% workers, one per segment count which executes the `scan_all/4' function.
+%%
+%% <B>N.B.</B>: This operation can consume a lot of read capacity. It is a good
+%% idea to limit the number of segments used in a scan operation.
+%%
+%% The coordinator that is spawned here is <B>linked</B> to the caller. If you
+%% want more robust error handling, you should trap exit messages by the
+%% caller's process.
+%%
+%% Since this function returns the "raw" results, you will have to
+%% handle them appropriately within your own receive block.
+-spec scan_parallel(
+        Client :: darcy_request:aws_client(),
+        TableName :: binary(),
+        Expr :: map(),
+        Fun :: function(),
+        Timeout :: pos_integer(),
+        SegmentCount :: pos_integer(),
+        ReplyPid :: pid()) -> scan_timeout |
+                              { Results :: [ term() ], Errors :: [ term() ] }.
+scan_parallel(Client, TableName, Expr, Fun, _Timeout, SegmentCount, ReplyPid) ->
+    Reqs = [ make_scan_request([Expr, table_name(TableName), make_segments(N, SegmentCount)]) ||
+            N <- lists:seq(0, SegmentCount - 1) ],
+
+    spawn_link(fun() -> start_coordinator(Client, Fun, Reqs, ReplyPid) end).
+
+results_ok({ok, _}) -> true;
+results_ok(_) -> false.
+
+start_coordinator(Client, Fun, Reqs, Reply) ->
+    L = pmap(fun(Req) -> worker_scan_all(Client, Req, Fun) end, Reqs,
+                   ?BIG_TIMEOUT, scan_timeout),
+    {Res, Err} = lists:partition(fun results_ok/1, L),
+    Reply ! { lists:flatten([ R || {ok, R} <- Res ]), Err }.
+
+worker_scan_all(Client, Request, Fun) ->
+     do_scan_all(Client, Request, execute_scan(Client, Request), Fun, []).
+
+make_segments(N, Count) ->
+    #{ <<"Segment">> => N,
+       <<"TotalSegments">> => Count }.
+
+make_scan_request(Ops) ->
+    lists:foldl(fun(M, Acc) -> maps:merge(M, Acc) end, #{}, Ops).
+
+execute_scan(Client, Request) ->
+    case darcy_ddb_api:scan(Client, Request) of
+         {ok, Result, _Details                  } -> process_scan_result(Result);
+      {error,  Error, {Status, Headers, _Client}} -> {error, {Error, {Status, Headers}}}
+    end.
+
+process_scan_result(#{ <<"Count">> := 0, <<"ScannedCount">> := 0 }) -> {ok, empty_table};
+process_scan_result(#{ <<"Count">> := 0, <<"ScannedCount">> := _SC }) -> {ok, no_results};
+process_scan_result(#{ <<"Items">> := Items, <<"LastEvaluatedKey">> := _LEK } = M) ->
+    NewItems = [ clean_map(to_map(I)) || I <- Items ],
+    {partial, maps:put(<<"Items">>, NewItems, M)};
+
+process_scan_result(#{ <<"Items">> := Items } = M) ->
+    NewItems = [ clean_map(to_map(I)) || I <- Items ],
+    {ok, maps:put(<<"Items">>, NewItems, M)};
+
+process_scan_result(Other) ->
+    {error, {scan_error, Other}}.
+
+
+flatten(L) when is_list(L) -> lists:flatten(lists:reverse(L)).
+
 %% @doc This function returns a map without any Dynamo specific type tuples,
 %% which is useful for passing around internally in an application that doesn't
 %% care or understand Dynamo data types.
@@ -534,6 +770,53 @@ number_to_binary(V) when is_float(V) -> float_to_binary(V, [{decimals, 20}, comp
 retry_sleep(N) ->
     S = max(1000, (?RETRIES-N) * 1000),
     timer:sleep(S).
+
+%% split the big list into smaller batches and execute them in parallel.
+batch_pmap(F, List) when length(List) =< ?BATCH_SIZE -> pmap(F, List);
+batch_pmap(F, BigList) ->
+    Len = length(BigList),
+    I = items_per_batch(Len),
+    PC = lists:seq(1, Len, I),
+    Batches = make_batches(BigList, I, PC, []),
+    pmap(fun(E) -> lists:map(F, E) end, Batches).
+
+items_per_batch(Len) ->
+    case Len div ?BATCH_SIZE of
+        I when I =< ?BATCH_MAX -> ?BATCH_SIZE;
+        _ -> Len div ?BATCH_MAX
+    end.
+
+make_batches(_, _, [], Acc) -> lists:reverse(Acc);
+make_batches(L, Len, [H|T], Acc) ->
+    make_batches(L, Len, T, [ lists:sublist(L, H, Len) | Acc ]).
+
+%% parallel map
+%% http://erlang.org/pipermail/erlang-questions/2009-January/041214.html
+%%
+%% TODO: Maybe we do not care about the order messages are received
+pmap(F, Arglist) ->
+    pmap(F, Arglist, ?TIMEOUT, pmap_timeout).
+
+pmap(F, Arglist, Timeout, TimeoutError) ->
+    S = self(),
+    TaskID = make_ref(),
+    Workers = lists:map( fun(X) ->
+                                 spawn_link(fun() -> do_F(S, TaskID, F, X) end)
+                         end, Arglist),
+    gather(Workers, TaskID, Timeout, TimeoutError).
+
+do_F(Caller, TaskID, F, X) ->
+    Caller ! {self(), TaskID, catch(F(X))}.
+
+gather([], _, _, _) -> [];
+gather([W|R], TaskID, Timeout, TimeoutError) ->
+    receive
+        {W, TaskID, Val} ->
+            [Val | gather(R, TaskID, Timeout, TimeoutError)]
+    after Timeout ->
+        TimeoutError
+    end.
+
 
 %% Tests
 -ifdef(TEST).
