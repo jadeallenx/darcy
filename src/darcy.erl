@@ -254,7 +254,8 @@ enable_global_streams(Spec) ->
 attempt_make_global_table(Client, TableName, Regions) ->
     Req = #{ <<"GlobalTableName">> => TableName,
              <<"ReplicationGroup">> => [ #{ <<"RegionName">> => R } || R <- Regions ] },
-    case darcy_ddb_api:create_global_table(Client, Req) of
+    %% this is a long-running operation, make the response receive timeout 60 seconds
+    case darcy_ddb_api:create_global_table(Client, Req, [{recv_timeout, 60*1000}]) of
         {ok, _Result, {200, _Headers, _Client}} -> ok;
         {error, Error, {Status, _Headers, _Client}} -> {error, {global_table_creation_failed, {Status, Error}}}
     end.
@@ -288,9 +289,9 @@ describe_table(Client, TableName) ->
                              TableName :: binary() ) -> {ok, TableDesc :: map()} |
                                                         {error, Error :: term()}.
 describe_global_table(Client, TableName) ->
-    case darcy_ddb_api:describe_global_table(Client, table_name(TableName)) of
-         {ok, Result, _Details                  } -> {ok, Result};
-      {error,  Error, {Status, _Headers, Client}} -> {error, {table_description_error, {Status, Error}}}
+    case darcy_ddb_api:describe_global_table(Client, #{ <<"GlobalTableName">> => TableName }) of
+         {ok, Result, _Details                   } -> {ok, Result};
+      {error,  Error, {Status, _Headers, _Client}} -> {error, {table_description_error, {Status, Error}}}
     end.
 
 %% GET ITEM
