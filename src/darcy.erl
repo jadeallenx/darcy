@@ -707,7 +707,9 @@ unddt(#{ <<"N">> := V }) ->
     end;
 unddt(#{ <<"S">> := V }) -> V;
 unddt(#{ <<"BOOL">> := <<"true">> }) -> true;
+unddt(#{ <<"BOOL">> := true }) -> true;
 unddt(#{ <<"BOOL">> := <<"false">> }) -> false;
+unddt(#{ <<"BOOL">> := false }) -> false;
 unddt(#{ <<"L">> := V }) -> {list, [ unddt(E) || E <- V ]};
 unddt(#{ <<"M">> := V }) -> maps:map(fun(_K, Val) -> unddt(Val) end, V);
 unddt(#{ <<"SS">> := V }) -> {string_set, ?SET:from_list([ E || E <- V ])};
