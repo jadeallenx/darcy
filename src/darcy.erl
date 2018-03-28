@@ -574,11 +574,11 @@ scan_parallel(Client, TableName, Expr, Fun, SegmentCount) ->
     scan_parallel(Client, TableName, Expr, Fun, ?BIG_TIMEOUT, SegmentCount).
 
 scan_parallel(Client, TableName, Expr, Fun, Timeout, SegmentCount) ->
-    _ = scan_parallel(Client, TableName, Expr, Fun, Timeout, SegmentCount, self()),
+    {Ref, _Pid} = scan_parallel(Client, TableName, Expr, Fun, Timeout, SegmentCount, self()),
 
     receive
-        {Results, []} -> {ok, Results};
-        {Partial, Errors} -> {error, {Errors, Partial}};
+        {Ref, {Results, []}} -> {ok, Results};
+        {Ref, {Partial, Errors}} -> {error, {Errors, Partial}};
         Other -> Other
     after Timeout ->
         {error, scan_timeout}
@@ -602,6 +602,11 @@ scan_parallel(Client, TableName, Expr, Fun, Timeout, SegmentCount) ->
 %%
 %% Since this function returns the "raw" results, you will have to
 %% handle them appropriately within your own receive block.
+%%
+%% They will be in the form of `{Ref, {Results, Errors}}' where
+%% `Ref' matches the reference returned by this call.  The coordinator
+%% pid is the process which is coordinating the parallel workers.
+%% (You may or may not care about those.)
 -spec scan_parallel(
         Client :: darcy_request:aws_client(),
         TableName :: binary(),
@@ -609,22 +614,24 @@ scan_parallel(Client, TableName, Expr, Fun, Timeout, SegmentCount) ->
         Fun :: function(),
         Timeout :: pos_integer(),
         SegmentCount :: pos_integer(),
-        ReplyPid :: pid()) -> scan_timeout |
-                              { Results :: [ term() ], Errors :: [ term() ] }.
-scan_parallel(Client, TableName, Expr, Fun, _Timeout, SegmentCount, ReplyPid) ->
+        ReplyPid :: pid()) -> {Ref :: reference(),
+                               Coordinator :: pid()}.
+scan_parallel(Client, TableName, Expr, Fun, Timeout, SegmentCount, ReplyPid) ->
     Reqs = [ make_scan_request([Expr, table_name(TableName), make_segments(N, SegmentCount)]) ||
             N <- lists:seq(0, SegmentCount - 1) ],
 
-    spawn_link(fun() -> start_coordinator(Client, Fun, Reqs, ReplyPid) end).
+    Ref = make_ref(),
+    Pid = spawn_link(fun() -> start_coordinator(Client, Ref, Timeout, Fun, Reqs, ReplyPid) end),
+    {Ref, Pid}.
 
 results_ok({ok, _}) -> true;
 results_ok(_) -> false.
 
-start_coordinator(Client, Fun, Reqs, Reply) ->
+start_coordinator(Client, Ref, Timeout, Fun, Reqs, Reply) ->
     L = pmap(fun(Req) -> worker_scan_all(Client, Req, Fun) end, Reqs,
-                   ?BIG_TIMEOUT, scan_timeout),
+                   Timeout, {Ref, {[], scan_timeout}}),
     {Res, Err} = lists:partition(fun results_ok/1, L),
-    Reply ! { lists:flatten([ R || {ok, R} <- Res ]), Err }.
+    Reply ! {Ref, { lists:flatten([ R || {ok, R} <- Res ]), Err }}.
 
 worker_scan_all(Client, Request, Fun) ->
      do_scan_all(Client, Request, execute_scan(Client, Request), Fun, []).
