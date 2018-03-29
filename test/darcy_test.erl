@@ -6,11 +6,16 @@
 make_item(Name, Subject) ->
     Grades = [ rand:uniform(100) || _ <- lists:seq(1, rand:uniform(5)) ],
     Avg = lists:sum(Grades) / length(Grades),
+    Bool = choose_bool(rand:uniform()),
     #{ <<"Student">> => Name,
        <<"Subject">> => Subject,
        <<"Grades">> => {list, Grades},
-       <<"Average">> => Avg
+       <<"Average">> => Avg,
+       <<"hasTextbook">> => Bool
      }.
+
+choose_bool(X) when X > 0.50 -> true;
+choose_bool(_) -> false.
 
 names() -> [<<"Alice">>, <<"Bob">>, <<"Carol">>, <<"Dave">>, <<"Ethan">>,
             <<"Francine">>, <<"Gemma">>, <<"Hugh">>, <<"Ichabod">>,
@@ -124,6 +129,41 @@ example_test() ->
     {ok, Result} = darcy:get_item(Client, Tid, #{ <<"Student">> => <<"Foo">>,
                                                            <<"Subject">> => <<"Bar">> }),
     ?assertEqual(darcy:clean_map(Grades), Result),
+    %% gives "ACTIVE" status instead of "DELETING"
+    _ = darcy:delete_table(Client, Tid).
+
+scan_test() ->
+    _ = darcy:start(),
+    Client = darcy_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
+    Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }],
+    Keys = [<<"Student">>, <<"Subject">>],
+    Tid = make_table_name(),
+    TableSpec = darcy:make_table_spec(Tid, Attributes, Keys),
+    ok = darcy:make_table_if_not_exists(Client, TableSpec),
+    Students = [ make_item(one_of(names()), one_of(subjects())) ||
+                 _ <- lists:seq(1, 500) ],
+    Records = deduplicate(Students),
+    ok = darcy:batch_write_items(Client, Tid, Records),
+    {ok, Desc} = darcy:describe_table(Client, Tid),
+    ?assert(same_count(length(Records), Desc)),
+
+    {ok, Results} = darcy:scan_all(Client, Tid, #{}),
+    ?assertEqual(length(Records), length(Results)),
+
+    %% filter students without textbooks
+    Expr = darcy:to_ddb(#{ <<":val">> => false }),
+    Filter = #{ <<"FilterExpression">> => <<"hasTextbook = :val">>,
+                <<"ExpressionAttributeValues">> => Expr
+              },
+    {ok, Filtered} = darcy:scan_all(Client, Tid, Filter),
+    Expected = lists:filter(fun(#{<<"hasTextbook">> := false}) -> true; (_) -> false end, Records),
+    ?assertEqual(length(Expected), length(Filtered)),
+
+
+    %% try a parallel scan
+    {ok, F0} = darcy:scan_parallel(Client, Tid, Filter, fun(X) -> X end, 2),
+    ?assertEqual(length(Expected), length(F0)),
+
     %% gives "ACTIVE" status instead of "DELETING"
     _ = darcy:delete_table(Client, Tid).
 
