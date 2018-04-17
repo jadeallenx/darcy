@@ -67,7 +67,7 @@ values using the following rules:
    rules to its values)
 4. If a value is a list, attempt to interpret it as a string; if that fails, we
    treat it as a literal list.
-5. The atom `undefined` is treated as the DynamoDB `NULL` value.
+5. The atoms `undefined` and `null` are treated as the DynamoDB `NULL` value.
 6. The atoms `true` and `false` are treated as Dynamo boolean types.
 
 For ambiguous cases, we use tagged tuples, which have the following meanings:

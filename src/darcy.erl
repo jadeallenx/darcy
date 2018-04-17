@@ -744,7 +744,9 @@ to_ddb(M) when is_map(M) ->
 to_ddb(Other) -> erlang:error({error, badarg}, [Other]).
 
 %% @private
-ddt(undefined) -> #{ <<"NULL">> => <<>> };
+%% see http://boto3.readthedocs.io/en/latest/_modules/boto3/dynamodb/types.html
+ddt(undefined) -> #{ <<"NULL">> => true };
+ddt(null) -> #{ <<"NULL">> => true };
 ddt({blob, Data}) ->
     {M, F, A} = application:get_env(darcy, blob_encode_fun,
                                     {darcy, default_encode, []}),
