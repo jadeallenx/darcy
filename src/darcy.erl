@@ -630,11 +630,11 @@ results_ok(_) -> false.
 start_coordinator(Client, Ref, Timeout, Fun, Reqs, Reply) ->
     L = pmap(fun(Req) -> worker_scan_all(Client, Req, Fun) end, Reqs,
                    Timeout, {Ref, {[], scan_timeout}}),
-    ReplyMsg = make_reply_msg(L),
+    ReplyMsg = make_reply_msg(Ref, L),
     Reply ! {Ref, ReplyMsg}.
 
-make_reply_msg({Partial, scan_timeout}) -> {Partial, {error, scan_timeout}};
-make_reply_msg(Results) ->
+make_reply_msg(Ref, {Ref, {[], scan_timeout}}) -> {[], {error, scan_timeout}};
+make_reply_msg(_Ref, Results) ->
     {Res, Err} = lists:partition(fun results_ok/1, Results),
     {lists:flatten([ R || {ok, R} <- Res ]), Err}.
 
