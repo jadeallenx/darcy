@@ -419,7 +419,7 @@ make_put_request(TableName, Item,
        is_map(ExpressionAttributeValues) ->
     #{ <<"TableName">> => TableName,
        <<"ConditionalExpression">> => ConditionalExpression,
-       <<"ExpressionAttributeNames">> => to_ddb(ExpressionAttributeNames),
+       <<"ExpressionAttributeNames">> => ExpressionAttributeNames,
        <<"ExpressionAttributeValues">> => to_ddb(ExpressionAttributeValues),
        <<"Item">> => to_ddb(Item) }.
 
@@ -886,7 +886,7 @@ make_put_request_test() ->
     Expected = #{<<"ConditionalExpression">> =>
                      <<"#version = :old_version OR attribute_not_exists(#version)">>,
                  <<"ExpressionAttributeNames">> =>
-                     #{<<"#version">> => #{<<"S">> => <<"Version">>}},
+                     #{<<"#version">> => <<"Version">>},
                  <<"ExpressionAttributeValues">> =>
                      #{<<":old_version">> =>
                            #{<<"S">> => <<"totally_a_uuid">>}},

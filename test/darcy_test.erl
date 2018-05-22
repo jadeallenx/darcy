@@ -98,7 +98,8 @@ cas_test() ->
                 },
     ConditionMap = #{condition_expression => <<"#version = :old_version OR attribute_not_exists(#version)">>,
                      expression_attribute_names => #{<<"#version">> => <<"Version">>},
-                     expression_attribute_values => #{<<":old_version">> => <<"totally_a_uuid">>}},
+                     expression_attribute_values => #{<<":old_version">> => <<"totally_a_uuid">>}
+                    },
     ok = darcy:put_item(Client, TableId, GradesV2, ConditionMap),
 
     {ok, Result} = darcy:get_item(Client, TableId, #{ <<"Student">> => <<"Foo">>,
