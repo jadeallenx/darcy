@@ -394,12 +394,12 @@ batch_get_results(TableName, Responses) ->
                 Item :: map(),
                 ConditionMap :: map() ) -> ok | {error, Error :: term()}.
 put_item(Client, TableName, Item, ConditionMap) ->
-    ConditionalExpression = maps:get(condition_expression, ConditionMap, undefined),
+    ConditionExpression = maps:get(condition_expression, ConditionMap, undefined),
     ExpressionAttributeNames = maps:get(expression_attribute_names, ConditionMap, undefined),
     ExpressionAttributeValues = maps:get(expression_attribute_values, ConditionMap, undefined),
     Request = make_put_request(TableName,
                                Item,
-                               ConditionalExpression,
+                               ConditionExpression,
                                ExpressionAttributeNames,
                                ExpressionAttributeValues),
     case darcy_ddb_api:put_item(Client, Request) of
@@ -411,14 +411,14 @@ make_put_request(TableName, Item, undefined, undefined, undefined) ->
     #{ <<"TableName">> => TableName,
        <<"Item">> => to_ddb(Item) };
 make_put_request(TableName, Item,
-                 ConditionalExpression,
+                 ConditionExpression,
                  ExpressionAttributeNames,
                  ExpressionAttributeValues)
-  when is_binary(ConditionalExpression) and
+  when is_binary(ConditionExpression) and
        is_map(ExpressionAttributeNames) and
        is_map(ExpressionAttributeValues) ->
     #{ <<"TableName">> => TableName,
-       <<"ConditionalExpression">> => ConditionalExpression,
+       <<"ConditionExpression">> => ConditionExpression,
        <<"ExpressionAttributeNames">> => ExpressionAttributeNames,
        <<"ExpressionAttributeValues">> => to_ddb(ExpressionAttributeValues),
        <<"Item">> => to_ddb(Item) }.
@@ -875,15 +875,15 @@ make_put_request_test() ->
     Item = #{ <<"Student">> => <<"Foo">>,
               <<"Version">> => <<"totally_a_uuid">>
             },
-    ConditionalExpression = <<"#version = :old_version OR attribute_not_exists(#version)">>,
+    ConditionExpression = <<"#version = :old_version OR attribute_not_exists(#version)">>,
     ExpressionAttributeNames = #{<<"#version">> => <<"Version">>},
     ExpressionAttributeValues = #{<<":old_version">> => <<"totally_a_uuid">>},
 
     Request = make_put_request(TableName, Item,
-                               ConditionalExpression,
+                               ConditionExpression,
                                ExpressionAttributeNames,
                                ExpressionAttributeValues),
-    Expected = #{<<"ConditionalExpression">> =>
+    Expected = #{<<"ConditionExpression">> =>
                      <<"#version = :old_version OR attribute_not_exists(#version)">>,
                  <<"ExpressionAttributeNames">> =>
                      #{<<"#version">> => <<"Version">>},
