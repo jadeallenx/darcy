@@ -73,6 +73,77 @@ make_random_query(Records) ->
        <<"ExpressionAttributeValues">> => EV },
      find_student(Name, Records)}.
 
+cas_success_test() ->
+    _ = darcy:start(),
+    Client = darcy_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
+    Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }],
+    Keys = [<<"Student">>, <<"Subject">>],
+    TableId = make_table_name(),
+    TableSpec = darcy:make_table_spec(TableId, Attributes, Keys),
+    ok = darcy:make_table_if_not_exists(Client, TableSpec),
+
+    GradesV1 = #{ <<"Student">> => <<"Foo">>,
+                  <<"Subject">> => <<"Bar">>,
+                  <<"Grades">> => {list, [75,80,90]},
+                  <<"Average">> => 81.66666666666667,
+                  <<"Version">> => <<"totally_a_uuid">>
+                },
+    ok = darcy:put_item(Client, TableId, GradesV1),
+
+    GradesV2 = #{ <<"Student">> => <<"Foo">>,
+                  <<"Subject">> => <<"Bar">>,
+                  <<"Grades">> => {list, [75,80,90]},
+                  <<"Average">> => 90.0,
+                  <<"Version">> => <<"the_new_uuid">>
+                },
+    ConditionMap = #{condition_expression => <<"#version = :old_version OR attribute_not_exists(#version)">>,
+                     expression_attribute_names => #{<<"#version">> => <<"Version">>},
+                     expression_attribute_values => #{<<":old_version">> => <<"totally_a_uuid">>}
+                    },
+    ok = darcy:put_item(Client, TableId, GradesV2, ConditionMap),
+
+    {ok, Result} = darcy:get_item(Client, TableId, #{ <<"Student">> => <<"Foo">>,
+                                                      <<"Subject">> => <<"Bar">> }),
+    Expected = #{<<"Average">> => 90,
+                 <<"Grades">> => "KPZ",
+                 <<"Student">> => <<"Foo">>,
+                 <<"Subject">> => <<"Bar">>,
+                 <<"Version">> => <<"the_new_uuid">>},
+    ?assertEqual(Expected, Result),
+
+    _ = darcy:delete_table(Client, TableId).
+
+cas_failure_test() ->
+    _ = darcy:start(),
+    Client = darcy_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
+    Attributes = [{ <<"Student">>, <<"S">> }, { <<"Subject">>, <<"S">> }],
+    Keys = [<<"Student">>, <<"Subject">>],
+    TableId = make_table_name(),
+    TableSpec = darcy:make_table_spec(TableId, Attributes, Keys),
+    ok = darcy:make_table_if_not_exists(Client, TableSpec),
+
+    GradesV1 = #{ <<"Student">> => <<"Foo">>,
+                  <<"Subject">> => <<"Bar">>,
+                  <<"Grades">> => {list, [75,80,90]},
+                  <<"Average">> => 81.66666666666667,
+                  <<"Version">> => <<"totally_a_uuid">>
+                },
+    ok = darcy:put_item(Client, TableId, GradesV1),
+
+    GradesV2 = #{ <<"Student">> => <<"Foo">>,
+                  <<"Subject">> => <<"Bar">>,
+                  <<"Grades">> => {list, [75,80,90]},
+                  <<"Average">> => 90.0,
+                  <<"Version">> => <<"the_new_uuid">>
+                },
+    ConditionMap = #{condition_expression => <<"#version = :old_version OR attribute_not_exists(#version)">>,
+                     expression_attribute_names => #{<<"#version">> => <<"Version">>},
+                     expression_attribute_values => #{<<":old_version">> => <<"not_the_same">>}
+                    },
+    {error, {{_, <<"The conditional request failed">>}, _}} = darcy:put_item(Client, TableId, GradesV2, ConditionMap),
+
+    _ = darcy:delete_table(Client, TableId).
+
 batch_test() ->
     _ = darcy:start(),
     Client = darcy_client:make_local_client(<<"access">>, <<"secret">>, <<"12000">>),
@@ -166,4 +237,3 @@ scan_test() ->
 
     %% gives "ACTIVE" status instead of "DELETING"
     _ = darcy:delete_table(Client, Tid).
-

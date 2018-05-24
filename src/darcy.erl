@@ -39,6 +39,7 @@
     get_item/3,
     batch_get_items/3,
     put_item/3,
+    put_item/4,
     batch_write_items/3,
     query/3,
     query/4,
@@ -387,17 +388,47 @@ batch_get_results(TableName, Responses) ->
 
 %% PUT ITEM
 
+%% @doc Put a single item into the given dynamo table, with conditions!
+-spec put_item( Client :: darcy_client:aws_client(),
+                TableName :: binary(),
+                Item :: map(),
+                ConditionMap :: map() ) -> ok | {error, Error :: term()}.
+put_item(Client, TableName, Item, ConditionMap) ->
+    ConditionExpression = maps:get(condition_expression, ConditionMap, undefined),
+    ExpressionAttributeNames = maps:get(expression_attribute_names, ConditionMap, undefined),
+    ExpressionAttributeValues = maps:get(expression_attribute_values, ConditionMap, undefined),
+    Request = make_put_request(TableName,
+                               Item,
+                               ConditionExpression,
+                               ExpressionAttributeNames,
+                               ExpressionAttributeValues),
+    case darcy_ddb_api:put_item(Client, Request) of
+         {ok, #{}, {200, _Headers, _Client}} -> ok;
+    {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
+    end.
+
+make_put_request(TableName, Item, undefined, undefined, undefined) ->
+    #{ <<"TableName">> => TableName,
+       <<"Item">> => to_ddb(Item) };
+make_put_request(TableName, Item,
+                 ConditionExpression,
+                 ExpressionAttributeNames,
+                 ExpressionAttributeValues)
+  when is_binary(ConditionExpression) and
+       is_map(ExpressionAttributeNames) and
+       is_map(ExpressionAttributeValues) ->
+    #{ <<"TableName">> => TableName,
+       <<"ConditionExpression">> => ConditionExpression,
+       <<"ExpressionAttributeNames">> => ExpressionAttributeNames,
+       <<"ExpressionAttributeValues">> => to_ddb(ExpressionAttributeValues),
+       <<"Item">> => to_ddb(Item) }.
+
 %% @doc Put a single item into the given dynamo table.
 -spec put_item( Client :: darcy_client:aws_client(),
                 TableName :: binary(),
                 Item :: map() ) -> ok | {error, Error :: term()}.
 put_item(Client, TableName, Item) ->
-    Request = #{ <<"TableName">> => TableName,
-                 <<"Item">> => to_ddb(Item) },
-    case darcy_ddb_api:put_item(Client, Request) of
-         {ok, #{}, {200, _Headers, _Client}} -> ok;
-    {error, Error, {Code, Headers, _Client}} -> {error, {Error, [Code, Headers]}}
-    end.
+    put_item(Client, TableName, Item, #{}).
 
 %% @doc Put a list of items into the given Dynamo table.
 %%
@@ -838,6 +869,32 @@ gather([W|R], TaskID, Timeout, TimeoutError) ->
 %% Tests
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+make_put_request_test() ->
+    TableName = <<"foo">>,
+    Item = #{ <<"Student">> => <<"Foo">>,
+              <<"Version">> => <<"totally_a_uuid">>
+            },
+    ConditionExpression = <<"#version = :old_version OR attribute_not_exists(#version)">>,
+    ExpressionAttributeNames = #{<<"#version">> => <<"Version">>},
+    ExpressionAttributeValues = #{<<":old_version">> => <<"totally_a_uuid">>},
+
+    Request = make_put_request(TableName, Item,
+                               ConditionExpression,
+                               ExpressionAttributeNames,
+                               ExpressionAttributeValues),
+    Expected = #{<<"ConditionExpression">> =>
+                     <<"#version = :old_version OR attribute_not_exists(#version)">>,
+                 <<"ExpressionAttributeNames">> =>
+                     #{<<"#version">> => <<"Version">>},
+                 <<"ExpressionAttributeValues">> =>
+                     #{<<":old_version">> =>
+                           #{<<"S">> => <<"totally_a_uuid">>}},
+                 <<"Item">> =>
+                     #{<<"Student">> => #{<<"S">> => <<"Foo">>},
+                       <<"Version">> => #{<<"S">> => <<"totally_a_uuid">>}},
+                 <<"TableName">> => <<"foo">>},
+    ?assertEqual(Expected, Request).
 
 to_ddb_test() ->
     Raw = #{ <<"Grades">> => {list, [17,39,76,27]},
