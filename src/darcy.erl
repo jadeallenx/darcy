@@ -18,9 +18,11 @@
 -define(MAX_ERROR_DELAY, 32000). % maximum millseconds of delay before terminating operation
 -define(INITIAL_ERROR_STATE, #error_delay{}).
 
+%% This is a record because, later, I might try to extend this to reduce the sleep
+%% time based on the number of successful operations. So for now it only has one
+%% field, but it may have two or more in the future.
 -record(error_delay, {
-          delay = 0 :: non_neg_integer(),
-          success = 0 :: non_neg_integer()
+          delay = 0 :: non_neg_integer()
 }).
 
 -export([
