@@ -14,8 +14,14 @@
 -define(BIG_TIMEOUT, 5*60*1000). % 5 minutes
 -define(BATCH_SIZE, 100). % how many items to split into a batch
 -define(BATCH_MAX, 10). % maximum number of batches to process in a single go
--define(INITIAL_SCAN_ERROR_DELAY, 1000). % initial throughput retry delay in milliseconds
--define(MAX_ERROR_DELAY, 30000). % maximum millseconds of delay before terminating operation
+-define(INITIAL_ERROR_DELAY, 500). % initial throughput retry delay in milliseconds
+-define(MAX_ERROR_DELAY, 32000). % maximum millseconds of delay before terminating operation
+-define(INITIAL_ERROR_STATE, #error_delay{}).
+
+-record(error_delay, {
+          delay = 0 :: non_neg_integer(),
+          success = 0 :: non_neg_integer()
+}).
 
 -export([
     start/0,
@@ -583,34 +589,51 @@ same(X) -> X.
                                           {error, { Reason :: term(), Acc :: [ map() ]}}.
 scan_all(Client, TableName, Expr, Fun) ->
     Request = make_scan_request([Expr, table_name(TableName)]),
-    do_scan_all(Client, Request, execute_scan(Client, Request), Fun, [], ?INITIAL_SCAN_ERROR_DELAY).
+    do_scan_all(Client, Request, execute_scan(Client, Request), Fun, [], ?INITIAL_ERROR_STATE).
 
 do_scan_all(_Client, _Req, {ok, empty_table}, _Fun, _Acc, _ErrDelay) -> {ok, []};
 do_scan_all(_Client, _Req, {ok, no_results}, _Fun, Acc, _ErrDelay) -> {ok, flatten(Acc)};
 do_scan_all(_Client, _Req, {ok, #{ <<"Items">> := I }}, Fun, Acc, _ErrDelay) ->
     {ok, flatten([ batch_pmap(Fun, I) | Acc ])};
 
-do_scan_all(_Client, Req, {error, Error}, _Fun, Acc, ErrDelay) when ErrDelay > ?MAX_ERROR_DELAY ->
-    error_logger:error_msg("Error: ~p, request: ~p. Operation has exceeded maximum error delay, terminating...", [Error, Req]),
-    {error, {Error, Acc}};
-
-%% TODO: Seems like we should be able to implement this more cleanly, but
-%% good ideas on how to do so elude me at the moment.
-do_scan_all(Client, Req, {error, {EType, _ETxt}=Error}, Fun, Acc, ErrDelay) ->
-    [_, Exception] = binary:split(<<"#">>, EType),
-    case Exception of
-      <<"ProvisionedThroughputExceededException">> ->
-        error_logger:warning_msg("WARNING: ~p. Pid ~p sleeping for ~p ms, and retrying request...", [Error, self(), ErrDelay]),
-        timer:sleep(ErrDelay),
-        do_scan_all(Client, Req, execute_scan(Client, Req), Fun, Acc, ErrDelay*2);
+do_scan_all(Client, Req, {error, {EType, _ETxt}=Error}, Fun, Acc, EDelay) ->
+    case maybe_retry_scan_op(get_error_type(EType), EDelay) of
+      {true, NewErrDelay} ->
+        error_logger:warning_msg("Got error ~p. Will retry request.", [Error]),
+        maybe_sleep(NewErrDelay),
+        do_scan_all(Client, Req, execute_scan(Client, Req), Fun, Acc, NewErrDelay);
       _ ->
         error_logger:error_msg("Error executing scan_all: ~p request: ~p", [Error, Req]),
         {error, {Error, Acc}}
     end;
 
+%% TODO? Maybe throttle back up if we get "a lot" of successes.
 do_scan_all(Client, Req, {partial, #{ <<"LastEvaluatedKey">> := LEK, <<"Items">> := I }}, Fun, Acc, ErrDelay) ->
     NewRequest = make_scan_request([Req, #{ <<"ExclusiveStartKey">> => LEK }]),
+    maybe_sleep(ErrDelay),
     do_scan_all(Client, NewRequest, execute_scan(Client, NewRequest), Fun, [ batch_pmap(Fun, I) | Acc], ErrDelay).
+
+maybe_sleep(#error_delay{ delay = 0 }) ->
+    ok;
+maybe_sleep(#error_delay{ delay = D }) ->
+    error_logger:warning_msg("THROTTLE: Pid ~p sleeping for ~p ms before next request...", [self(), D]),
+    timer:sleep(D).
+
+maybe_retry_scan_op(<<"ProvisionedThroughputExceededException">>, #error_delay{ delay = 0 } = ErrState) ->
+    {true, ErrState#error_delay{ delay = ?INITIAL_ERROR_DELAY }};
+
+maybe_retry_scan_op(<<"ProvisionedThroughputExceededException">>, #error_delay{ delay = D } = ErrState) when D > ?MAX_ERROR_DELAY ->
+    {false, ErrState};
+
+maybe_retry_scan_op(<<"ProvisionedThroughputExceededException">>, #error_delay{ delay = D } = ErrState) ->
+    {true, ErrState#error_delay{ delay = D*2 }};
+
+maybe_retry_scan_op(_Type, ErrorState) ->
+    {false, ErrorState}.
+
+get_error_type(Type) ->
+    [_, Exception] = binary:split(<<"#">>, Type),
+    Exception.
 
 %% @doc Scan a table in parallel using the given expression. This
 %% function is equivalent to `scan_parallel/7' with a timeout value of 60000
@@ -688,7 +711,7 @@ make_reply_msg(_Ref, Results) ->
     {lists:flatten([ R || {ok, R} <- Res ]), Err}.
 
 worker_scan_all(Client, Request, Fun) ->
-     do_scan_all(Client, Request, execute_scan(Client, Request), Fun, [], ?INITIAL_SCAN_ERROR_DELAY).
+     do_scan_all(Client, Request, execute_scan(Client, Request), Fun, [], ?INITIAL_ERROR_STATE).
 
 make_segments(N, Count) ->
     #{ <<"Segment">> => N,
