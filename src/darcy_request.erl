@@ -150,8 +150,8 @@ signed_header({Name, _}) ->
 -include_lib("eunit/include/eunit.hrl").
 
 crypto_lib_info_test() ->
-    ?debugFmt("~p", [crypto:info_lib()]),
-    ?debugFmt("~p", [os:cmd("ldd " ++ code:priv_dir(crypto) ++ "/lib/crypto.so"))])
+    ?debugFmt("Crypto info~n~p~n", [crypto:info_lib()]),
+    ?debugFmt("~n~p~n", [os:cmd("ldd " ++ code:priv_dir(crypto) ++ "/lib/crypto.so")]),
     ok.
 
 %% sign_request/5 extracts credentials, service and region information from
