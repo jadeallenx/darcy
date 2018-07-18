@@ -149,6 +149,11 @@ signed_header({Name, _}) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
+crypto_lib_info_test() ->
+    ?debugFmt("~p", [crypto:info_lib()]),
+    ?debugFmt("~p", [os:cmd("ldd " ++ code:priv_dir(crypto) ++ "/lib/crypto.so"))])
+    ok.
+
 %% sign_request/5 extracts credentials, service and region information from
 %% a client map and generates an AWS signature version 4 for a request.  It
 %% returns a new set of HTTP headers with Authorization and X-Aws-Date
