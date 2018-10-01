@@ -44,8 +44,12 @@
          describe_backup/3,
          describe_continuous_backups/2,
          describe_continuous_backups/3,
+         describe_endpoints/2,
+         describe_endpoints/3,
          describe_global_table/2,
          describe_global_table/3,
+         describe_global_table_settings/2,
+         describe_global_table_settings/3,
          describe_limits/2,
          describe_limits/3,
          describe_table/2,
@@ -68,14 +72,20 @@
          query/3,
          restore_table_from_backup/2,
          restore_table_from_backup/3,
+         restore_table_to_point_in_time/2,
+         restore_table_to_point_in_time/3,
          scan/2,
          scan/3,
          tag_resource/2,
          tag_resource/3,
          untag_resource/2,
          untag_resource/3,
+         update_continuous_backups/2,
+         update_continuous_backups/3,
          update_global_table/2,
          update_global_table/3,
+         update_global_table_settings/2,
+         update_global_table_settings/3,
          update_item/2,
          update_item/3,
          update_table/2,
@@ -230,6 +240,9 @@ batch_get_item(Client, Input, Options)
 %% same <code>BatchWriteItem</code> request. For example, you cannot put and
 %% delete the same item in the same <code>BatchWriteItem</code> request.
 %%
+%% </li> <li> Your request contains at least two items with identical hash
+%% and range keys (which essentially is two put operations).
+%%
 %% </li> <li> There are more than 25 requests in the batch.
 %%
 %% </li> <li> Any individual item in a batch exceeds 400 KB.
@@ -250,25 +263,23 @@ batch_write_item(Client, Input, Options)
 %% up. There is no limit to the number of on-demand backups that can be
 %% taken.
 %%
+%% When you create an On-Demand Backup, a time marker of the request is
+%% cataloged, and the backup is created asynchronously, by applying all
+%% changes until the time of the request to the last full table snapshot.
+%% Backup requests are processed instantaneously and become available for
+%% restore within minutes.
+%%
 %% You can call <code>CreateBackup</code> at a maximum rate of 50 times per
 %% second.
 %%
 %% All backups in DynamoDB work without consuming any provisioned throughput
-%% on the table. This results in a fast, low-cost, and scalable backup
-%% process. In general, the larger the table, the more time it takes to back
-%% up. The backup is stored in an S3 data store that is maintained and
-%% managed by DynamoDB.
+%% on the table.
 %%
-%% Backups incorporate all writes (delete, put, update) that were completed
-%% within the last minute before the backup request was initiated. Backups
-%% might include some writes (delete, put, update) that were completed before
-%% the backup request was finished.
-%%
-%% For example, if you submit the backup request on 2018-12-14 at 14:25:00,
-%% the backup is guaranteed to contain all data committed to the table up to
-%% 14:24:00, and data committed after 14:26:00 will not be. The backup may or
-%% may not contain data modifications made between 14:24:00 and 14:26:00.
-%% On-Demand Backup does not support causal consistency.
+%% If you submit a backup request on 2018-12-14 at 14:25:00, the backup is
+%% guaranteed to contain all data committed to the table up to 14:24:00, and
+%% data committed after 14:26:00 will not be. The backup may or may not
+%% contain data modifications made between 14:24:00 and 14:26:00. On-Demand
+%% Backup does not support causal consistency.
 %%
 %% Along with data, the following are also included on the backups:
 %%
@@ -292,20 +303,39 @@ create_backup(Client, Input, Options)
 %% a replication relationship between two or more DynamoDB tables with the
 %% same table name in the provided regions.
 %%
-%% Tables can only be added as the replicas of a global table group under the
-%% following conditions:
+%% If you want to add a new replica table to a global table, each of the
+%% following conditions must be true:
 %%
-%% <ul> <li> The tables must have the same name.
+%% <ul> <li> The table must have the same primary key as all of the other
+%% replicas.
 %%
-%% </li> <li> The tables must contain no items.
+%% </li> <li> The table must have the same name as all of the other replicas.
 %%
-%% </li> <li> The tables must have the same hash key and sort key (if
-%% present).
+%% </li> <li> The table must have DynamoDB Streams enabled, with the stream
+%% containing both the new and the old images of the item.
 %%
-%% </li> <li> The tables must have DynamoDB Streams enabled
-%% (NEW_AND_OLD_IMAGES).
+%% </li> <li> None of the replica tables in the global table can contain any
+%% data.
 %%
-%% </li> </ul>
+%% </li> </ul> If global secondary indexes are specified, then the following
+%% conditions must also be met:
+%%
+%% <ul> <li> The global secondary indexes must have the same name.
+%%
+%% </li> <li> The global secondary indexes must have the same hash key and
+%% sort key (if present).
+%%
+%% </li> </ul> <important> Write capacity settings should be set consistently
+%% across your replica tables and secondary indexes. DynamoDB strongly
+%% recommends enabling auto scaling to manage the write capacity settings for
+%% all of your global tables replicas and indexes.
+%%
+%% If you prefer to manage write capacity settings manually, you should
+%% provision equal replicated write capacity units to your replica tables.
+%% You should also provision equal replicated write capacity units to
+%% matching secondary indexes across your global table.
+%%
+%% </important>
 create_global_table(Client, Input)
   when is_map(Client), is_map(Input) ->
     create_global_table(Client, Input, []).
@@ -414,9 +444,19 @@ describe_backup(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"DescribeBackup">>, Input, Options).
 
-%% @doc Checks the status of the backup restore settings on the specified
-%% table. If backups are enabled, <code>ContinuousBackupsStatus</code> will
-%% bet set to ENABLED.
+%% @doc Checks the status of continuous backups and point in time recovery on
+%% the specified table. Continuous backups are <code>ENABLED</code> on all
+%% tables at table creation. If point in time recovery is enabled,
+%% <code>PointInTimeRecoveryStatus</code> will be set to ENABLED.
+%%
+%% Once continuous backups and point in time recovery are enabled, you can
+%% restore to any point in time within
+%% <code>EarliestRestorableDateTime</code> and
+%% <code>LatestRestorableDateTime</code>.
+%%
+%% <code>LatestRestorableDateTime</code> is typically 5 minutes before the
+%% current time. You can restore your table to any point in time during the
+%% last 35 days.
 %%
 %% You can call <code>DescribeContinuousBackups</code> at a maximum rate of
 %% 10 times per second.
@@ -427,13 +467,29 @@ describe_continuous_backups(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"DescribeContinuousBackups">>, Input, Options).
 
-%% @doc Returns information about the global table.
+
+describe_endpoints(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    describe_endpoints(Client, Input, []).
+describe_endpoints(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"DescribeEndpoints">>, Input, Options).
+
+%% @doc Returns information about the specified global table.
 describe_global_table(Client, Input)
   when is_map(Client), is_map(Input) ->
     describe_global_table(Client, Input, []).
 describe_global_table(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"DescribeGlobalTable">>, Input, Options).
+
+%% @doc Describes region specific settings for a global table.
+describe_global_table_settings(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    describe_global_table_settings(Client, Input, []).
+describe_global_table_settings(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"DescribeGlobalTableSettings">>, Input, Options).
 
 %% @doc Returns the current provisioned-capacity limits for your AWS account
 %% in a region, both for the region as a whole and for any one DynamoDB table
@@ -570,8 +626,7 @@ list_backups(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"ListBackups">>, Input, Options).
 
-%% @doc Lists all the global tables. Only those global tables that have
-%% replicas in the region specified as input are returned.
+%% @doc Lists all global tables that have a replica in the specified region.
 list_global_tables(Client, Input)
   when is_map(Client), is_map(Input) ->
     list_global_tables(Client, Input, []).
@@ -741,7 +796,8 @@ query(Client, Input, Options)
     request(Client, <<"Query">>, Input, Options).
 
 %% @doc Creates a new table from an existing backup. Any number of users can
-%% execute up to 10 concurrent restores in a given account.
+%% execute up to 4 concurrent restores (any type of restore) in a given
+%% account.
 %%
 %% You can call <code>RestoreTableFromBackup</code> at a maximum rate of 10
 %% times per second.
@@ -756,6 +812,8 @@ query(Client, Input, Options)
 %%
 %% </li> <li> Tags
 %%
+%% </li> <li> Stream settings
+%%
 %% </li> <li> Time to Live (TTL) settings
 %%
 %% </li> </ul>
@@ -765,6 +823,55 @@ restore_table_from_backup(Client, Input)
 restore_table_from_backup(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"RestoreTableFromBackup">>, Input, Options).
+
+%% @doc Restores the specified table to the specified point in time within
+%% <code>EarliestRestorableDateTime</code> and
+%% <code>LatestRestorableDateTime</code>. You can restore your table to any
+%% point in time during the last 35 days. Any number of users can execute up
+%% to 4 concurrent restores (any type of restore) in a given account.
+%%
+%% When you restore using point in time recovery, DynamoDB restores your
+%% table data to the state based on the selected date and time
+%% (day:hour:minute:second) to a new table.
+%%
+%% Along with data, the following are also included on the new restored table
+%% using point in time recovery:
+%%
+%% <ul> <li> Global secondary indexes (GSIs)
+%%
+%% </li> <li> Local secondary indexes (LSIs)
+%%
+%% </li> <li> Provisioned read and write capacity
+%%
+%% </li> <li> Encryption settings
+%%
+%% <important> All these settings come from the current settings of the
+%% source table at the time of restore.
+%%
+%% </important> </li> </ul> You must manually set up the following on the
+%% restored table:
+%%
+%% <ul> <li> Auto scaling policies
+%%
+%% </li> <li> IAM policies
+%%
+%% </li> <li> Cloudwatch metrics and alarms
+%%
+%% </li> <li> Tags
+%%
+%% </li> <li> Stream settings
+%%
+%% </li> <li> Time to Live (TTL) settings
+%%
+%% </li> <li> Point in time recovery settings
+%%
+%% </li> </ul>
+restore_table_to_point_in_time(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    restore_table_to_point_in_time(Client, Input, []).
+restore_table_to_point_in_time(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"RestoreTableToPointInTime">>, Input, Options).
 
 %% @doc The <code>Scan</code> operation returns one or more items and item
 %% attributes by accessing every item in a table or a secondary index. To
@@ -835,15 +942,65 @@ untag_resource(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"UntagResource">>, Input, Options).
 
-%% @doc Adds or removes replicas to the specified global table. The global
-%% table should already exist to be able to use this operation. Currently,
-%% the replica to be added should be empty.
+%% @doc <code>UpdateContinuousBackups</code> enables or disables point in
+%% time recovery for the specified table. A successful
+%% <code>UpdateContinuousBackups</code> call returns the current
+%% <code>ContinuousBackupsDescription</code>. Continuous backups are
+%% <code>ENABLED</code> on all tables at table creation. If point in time
+%% recovery is enabled, <code>PointInTimeRecoveryStatus</code> will be set to
+%% ENABLED.
+%%
+%% Once continuous backups and point in time recovery are enabled, you can
+%% restore to any point in time within
+%% <code>EarliestRestorableDateTime</code> and
+%% <code>LatestRestorableDateTime</code>.
+%%
+%% <code>LatestRestorableDateTime</code> is typically 5 minutes before the
+%% current time. You can restore your table to any point in time during the
+%% last 35 days..
+update_continuous_backups(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    update_continuous_backups(Client, Input, []).
+update_continuous_backups(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"UpdateContinuousBackups">>, Input, Options).
+
+%% @doc Adds or removes replicas in the specified global table. The global
+%% table must already exist to be able to use this operation. Any replica to
+%% be added must be empty, must have the same name as the global table, must
+%% have the same key schema, and must have DynamoDB Streams enabled and must
+%% have same provisioned and maximum write capacity units.
+%%
+%% <note> Although you can use <code>UpdateGlobalTable</code> to add replicas
+%% and remove replicas in a single request, for simplicity we recommend that
+%% you issue separate requests for adding or removing replicas.
+%%
+%% </note> If global secondary indexes are specified, then the following
+%% conditions must also be met:
+%%
+%% <ul> <li> The global secondary indexes must have the same name.
+%%
+%% </li> <li> The global secondary indexes must have the same hash key and
+%% sort key (if present).
+%%
+%% </li> <li> The global secondary indexes must have the same provisioned and
+%% maximum write capacity units.
+%%
+%% </li> </ul>
 update_global_table(Client, Input)
   when is_map(Client), is_map(Input) ->
     update_global_table(Client, Input, []).
 update_global_table(Client, Input, Options)
   when is_map(Client), is_map(Input), is_list(Options) ->
     request(Client, <<"UpdateGlobalTable">>, Input, Options).
+
+%% @doc Updates settings for a global table.
+update_global_table_settings(Client, Input)
+  when is_map(Client), is_map(Input) ->
+    update_global_table_settings(Client, Input, []).
+update_global_table_settings(Client, Input, Options)
+  when is_map(Client), is_map(Input), is_list(Options) ->
+    request(Client, <<"UpdateGlobalTableSettings">>, Input, Options).
 
 %% @doc Edits an existing item's attributes, or adds a new item to the table
 %% if it does not already exist. You can put, delete, or add attribute
