@@ -2,7 +2,8 @@
 
 -export([make_client/3, make_temporary_client/4,
          switch_region/2,
-	 make_local_client/3]).
+         make_local_client/3,
+         make_local_client/4]).
 
 -type access_key_id() :: binary().
 -type secret_access_key() :: binary().
@@ -56,6 +57,18 @@ make_local_client(AccessKeyID, SecretAccessKey, Port)
     #{access_key_id => AccessKeyID,
       secret_access_key => SecretAccessKey,
       region => <<"local">>,
+      proto => <<"http">>,
+      port => Port,
+      service => undefined}.
+
+-spec make_local_client(access_key_id(), secret_access_key(), binary(), http_port()) ->
+			       aws_client().
+make_local_client(AccessKeyID, SecretAccessKey, Host, Port)
+  when is_binary(AccessKeyID), is_binary(SecretAccessKey), is_binary(Port) ->
+    #{access_key_id => AccessKeyID,
+      secret_access_key => SecretAccessKey,
+      region => <<"local">>,
+      endpoint => Host,
       proto => <<"http">>,
       port => Port,
       service => undefined}.
